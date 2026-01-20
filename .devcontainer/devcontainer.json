@@ -1,0 +1,26 @@
+{
+    "image": "pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel",
+    "name": "mowing-terrain-seg-dev-env",
+    "remoteUser": "serene",
+    "runArgs": [
+        "--name", "mowing-terrain-seg-dev-env",
+        "--net", "host",
+        "--gpus", "all",
+        "--shm-size=16g",
+        "-e", "PYTHONUNBUFFERED=1",
+        "-e", "DISPLAY=:0",
+        "-v", "/tmp/.X11-unix:/tmp/.X11-unix:rw",
+        "-u", "serene"
+    ],
+    "postCreateCommand": "bash -c 'apt-get update && apt-get install -y git libgl1 libglib2.0-0 && pip install -r requirements.txt && if [ -f fix-permissions.sh ]; then chmod +x fix-permissions.sh; fi'",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-toolsai.jupyter",
+                "ms-python.autopep8"
+            ]
+        }
+    }
+
+}
