@@ -1,4 +1,4 @@
-# src/models/losses/cross_entropy_loss.py
+# src/mowing_terrain_seg/models/losses/cross_entropy_loss.py
 import torch
 import torch.nn.functional as F
 from mmseg.models.losses import cross_entropy_loss
