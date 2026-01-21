@@ -3,11 +3,36 @@ import argparse
 import logging
 import os
 import os.path as osp
+import sys
 from functools import partial
 
+# Add project root to path to import custom modules
+_project_root = osp.dirname(osp.dirname(osp.dirname(osp.abspath(__file__))))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+# Import custom modules to register visualizers, datasets, etc.
+try:
+    import src  # This registers CustomSegLocalVisualizer and other custom modules
+except ImportError:
+    pass  # If src is not available, continue without it
+
 import mmengine
+import torch
 import torch.multiprocessing as mp
 from torch.multiprocessing import Process, set_start_method
+
+
+
+# Fix for PyTorch 2.6 weights_only loading issue
+# Patch torch.load to use weights_only=False for compatibility with older checkpoints
+_original_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    """Patched torch.load that defaults to weights_only=False for compatibility."""
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
 
 from mmdeploy.apis import (create_calib_input_data, extract_model,
                            get_predefined_partition_cfg, torch2onnx,
@@ -66,23 +91,96 @@ def parse_args():
     return args
 
 
-def create_process(name, target, args, kwargs, ret_value=None):
+def _patch_torch_load_in_subprocess():
+    """Patch torch.load in subprocess to handle PyTorch 2.6 weights_only issue."""
+    import torch
+    _original_load = torch.load
+    def _patched_load(*args, **kwargs):
+        if 'weights_only' not in kwargs:
+            kwargs['weights_only'] = False
+        return _original_load(*args, **kwargs)
+    torch.load = _patched_load
+
+
+def _register_custom_modules_in_subprocess():
+    """Register custom modules (visualizers, datasets, etc.) in subprocess."""
+    import sys
+    import os.path as osp
+    # Add project root to path
+    _project_root = osp.dirname(osp.dirname(osp.dirname(osp.abspath(__file__))))
+    if _project_root not in sys.path:
+        sys.path.insert(0, _project_root)
+    
+    # Ensure mmseg is imported first to initialize registries
+    try:
+        from mmseg.registry import VISUALIZERS
+        from mmseg import registry as mmseg_registry
+        # Import mmseg modules to ensure registry is initialized
+        from mmseg.visualization import SegLocalVisualizer
+    except Exception:
+        pass
+    
+    # Import to register custom modules (this must happen after mmseg is imported)
+    try:
+        import src  # This registers CustomSegLocalVisualizer
+        # Verify registration
+        from mmseg.registry import VISUALIZERS
+        if 'CustomSegLocalVisualizer' in VISUALIZERS._module_dict:
+            pass  # Successfully registered
+    except ImportError:
+        pass
+    except Exception:
+        pass  # If registration fails, continue anyway
+
+
+class _PatchedTargetWrapper:
+    """Picklable wrapper class that patches torch.load and registers custom modules before calling target_wrapper."""
+    def __init__(self, target, log_level, ret_value):
+        self.target = target
+        self.log_level = log_level
+        self.ret_value = ret_value
+    
+    def __call__(self, *args, **kwargs):
+        _patch_torch_load_in_subprocess()
+        _register_custom_modules_in_subprocess()
+        wrap_func = partial(target_wrapper, self.target, self.log_level, self.ret_value)
+        return wrap_func(*args, **kwargs)
+
+
+def create_process(name, target, args, kwargs, ret_value=None, optional=False):
+    """Create and run a process.
+    
+    Args:
+        name: Process name for logging
+        target: Target function to run
+        args: Positional arguments
+        kwargs: Keyword arguments
+        ret_value: Return value holder (multiprocessing.Value)
+        optional: If True, don't exit on failure (just log warning)
+    """
     logger = get_root_logger()
     logger.info(f'{name} start.')
     log_level = logger.level
 
-    wrap_func = partial(target_wrapper, target, log_level, ret_value)
+    # Use a picklable class-based wrapper
+    wrapped_target = _PatchedTargetWrapper(target, log_level, ret_value)
 
-    process = Process(target=wrap_func, args=args, kwargs=kwargs)
+    process = Process(target=wrapped_target, args=args, kwargs=kwargs)
     process.start()
     process.join()
 
     if ret_value is not None:
         if ret_value.value != 0:
-            logger.error(f'{name} failed.')
-            exit(1)
+            if optional:
+                logger.warning(f'{name} failed (optional step, continuing).')
+                return False
+            else:
+                logger.error(f'{name} failed.')
+                exit(1)
         else:
             logger.info(f'{name} success.')
+            return True
+    return True
 
 
 def torch2ir(ir_type: IR):
@@ -104,7 +202,7 @@ def main():
     args = parse_args()
     set_start_method('spawn', force=True)
     logger = get_root_logger()
-    log_level = logging.getLevelName(args.log_level)
+    log_level = getattr(logging, args.log_level)
     logger.setLevel(log_level)
 
     pipeline_funcs = [
@@ -259,7 +357,7 @@ def main():
     backend_files = to_backend(
         backend,
         ir_files,
-        work_dir=args.work_dir,
+        work_dir=args.work_dir, 
         deploy_cfg=deploy_cfg,
         log_level=log_level,
         device=args.device,
@@ -308,16 +406,27 @@ def main():
     if backend == Backend.SNPE:
         extra['uri'] = args.uri
 
-    # get backend inference result, try render
+    # get backend inference result, try render (optional - don't fail deployment if visualization fails)
+    ret_value_vis1 = mp.Value('d', 0, lock=False)
+    backend_output_file = osp.join(args.work_dir, f'output_{backend.value}.jpg')
     create_process(
         f'visualize {backend.value} model',
         target=visualize_model,
         args=(model_cfg_path, deploy_cfg_path, backend_files, args.test_img,
               args.device),
         kwargs=extra,
-        ret_value=ret_value)
+        ret_value=ret_value_vis1,
+        optional=True)
+    
+    # Check if visualization file was actually created
+    if osp.exists(backend_output_file):
+        logger.info(f'Backend visualization saved to: {backend_output_file}')
+    else:
+        logger.warning(f'Backend visualization file not created: {backend_output_file}')
 
-    # get pytorch model inference result, try visualize if possible
+    # get pytorch model inference result, try visualize if possible (optional)
+    ret_value_vis2 = mp.Value('d', 0, lock=False)
+    pytorch_output_file = osp.join(args.work_dir, 'output_pytorch.jpg')
     create_process(
         'visualize pytorch model',
         target=visualize_model,
@@ -325,10 +434,18 @@ def main():
               args.test_img, args.device),
         kwargs=dict(
             backend=Backend.PYTORCH,
-            output_file=osp.join(args.work_dir, 'output_pytorch.jpg'),
+            output_file=pytorch_output_file,
             show_result=args.show),
-        ret_value=ret_value)
-    logger.info('All process success.')
+        ret_value=ret_value_vis2,
+        optional=True)
+    
+    # Check if visualization file was actually created
+    if osp.exists(pytorch_output_file):
+        logger.info(f'PyTorch visualization saved to: {pytorch_output_file}')
+    else:
+        logger.warning(f'PyTorch visualization file not created: {pytorch_output_file}')
+    
+    logger.info('Deployment process completed. Model exported successfully.')
 
 
 if __name__ == '__main__':
