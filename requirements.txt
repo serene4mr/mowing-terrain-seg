@@ -26,3 +26,8 @@ tensorboard>=2.0.0
 pyyaml>=6.0
 tqdm>=4.64.0
 future>=0.18.0
+
+# Dependency constraints
+protobuf<=3.20.2
+
+mlflow>=2.0.0

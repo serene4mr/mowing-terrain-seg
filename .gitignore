@@ -54,6 +54,7 @@ venv.bak/
 .Trashes
 ehthumbs.db
 Thumbs.db
+*.db
 
 # Data and experiments
 data/
@@ -99,6 +100,8 @@ docs/build/
 dmypy.json
 
 work_dirs/
+work_dirs_old/
+mlruns/
 
 
 assets/

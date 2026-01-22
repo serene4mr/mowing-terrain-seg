@@ -26,7 +26,7 @@ pip install -r requirements.txt
 
 ```bash
 python tools/train.py \
-    configs/ycor-lm-3cls-exps/deeplabv3plus/deeplabv3plus_r50-d8_4xb2-40k_ycor-1024x544.py \
+    configs/train/ycor-lm-3cls-exps/deeplabv3plus/deeplabv3plus_r50-d8_4xb2-40k_ycor-1024x544.py \
     --work-dir work_dirs/my_experiment
 ```
 

@@ -31,7 +31,7 @@ default_hooks = dict(
         type='CheckpointHook',
         by_epoch=False,
         interval=4000,
-        max_keep_ckpts=5,
+        max_keep_ckpts=0,
         save_best=[
             'val/mIoU',
             'val/mDice',
