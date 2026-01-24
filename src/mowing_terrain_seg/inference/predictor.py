@@ -22,14 +22,18 @@ class BasePredictor(ABC):
         
         self.cfg_uri = cfg_uri
         self.model_uri = model_uri # checkpoint path in term of torch backend
-        self.backend =  backend
+        self.backend = backend
         self.device = device
         
         self.model = None # placeholder for model
         self.cfg = None # placeholder for cfg
         
-    def __call__(self):
+        print(self.backend)
+        
         self._load_model()
+        
+    def __call__(self):
+        pass
         
     def _load_model(self) -> None:
         """
@@ -41,13 +45,20 @@ class BasePredictor(ABC):
             
             self.cfg = Config.fromfile(self.cfg_uri)
             
+            # Temporarily monkey patch torch.load to use weights_only=False
+            original_load = torch.load
+            def patched_load(*args, **kwargs):
+                kwargs['weights_only'] = False
+                return original_load(*args, **kwargs)
+            torch.load = patched_load
+            
             self.model = init_model(
                 config = self.cfg,
                 checkpoint=self.model_uri,
                 device=self.device
             )
             
-        if self.backend == Backend.ONNX or Backend.TENSORRT:
+        if self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
             # TODO: implement later
             raise NotImplementedError
         
@@ -58,12 +69,12 @@ class BasePredictor(ABC):
         test_pipeline = []
         if self.backend == Backend.TORCH:
             
-            test_pipeline = self.model.cfg.test_pipeline
+            test_pipeline = self.cfg.test_pipeline
             for t in test_pipeline:
                 if t.get('type') == 'LoadAnnotations':
                     test_pipeline.remove(t)
         
-        if self.backend == Backend.ONNX or Backend.TENSORRT:
+        if self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
             # test_pipeline = [
             #     {'type': 'LoadImageFromNDArray'},
             #     {'keep_ratio': True, 'scale': (1024, 544), 'type': 'Resize'},
@@ -71,6 +82,8 @@ class BasePredictor(ABC):
             # ]
             # TODO: implement later
             raise NotImplementedError
+
+        test_pipeline[0]['type'] = 'LoadImageFromNDArray'
 
         is_batch = True
         if not isinstance(imgs, (list, tuple)):
@@ -98,17 +111,17 @@ class BasePredictor(ABC):
         """Convert raw images (HWC np.ndarray) -> batch input for backend."""
         pass
 
-    @abstractmethod
-    def _forward(self, batch: Any) -> Any:
-        """forward data through backend (Torch / ONNX / TensorRT)."""
-        ...
+    # @abstractmethod
+    # def _forward(self, batch: Any) -> Any:
+    #     """forward data through backend (Torch / ONNX / TensorRT)."""
+    #     ...
         
-    @abstractmethod
-    def _postprocess(self, raw_output: Any):
-        """
-        Convert raw output of prediction to final results (mask, v.v).
-        """
-        ...   
+    # @abstractmethod
+    # def _postprocess(self, raw_output: Any):
+    #     """
+    #     Convert raw output of prediction to final results (mask, v.v).
+    #     """
+    #     ...   
              
     
     def predict(self, imgs: Union[np.ndarray, Sequence[np.ndarray]]):
@@ -131,7 +144,7 @@ class BasePredictor(ABC):
 
 class SegPredictor(BasePredictor):
     
-    def __init__(self, cfg_uri: str, model_uri: str, backend: Backend, device: str =' cuda:0'):
+    def __init__(self, cfg_uri: str, model_uri: str, backend: Backend, device: str ='cuda:0'):
         super().__init__(cfg_uri, model_uri, backend, device)
         
         
