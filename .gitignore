@@ -105,4 +105,4 @@ mlruns/
 
 
 assets/
-inference/
+inference_out/
