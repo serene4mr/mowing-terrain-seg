@@ -67,7 +67,7 @@ class BasePredictor(ABC):
     def _prepare_data(
         self, 
         imgs: Union[np.ndarray, Sequence[np.ndarray]]
-    ) -> tuple(Union[dict, tuple, list], bool) :
+    ) -> (Union[dict, tuple, list], bool) :
         """
         Prepare input images by applying test pipeline transforms.
         
@@ -148,29 +148,37 @@ class BasePredictor(ABC):
         
         if self.backend == Backend.TORCH:
             data_preprocessor_cfg = self.cfg['data_preprocessor']
+            data_preprocessor = MODELS.build(data_preprocessor_cfg)
+            preprocessed_data = data_preprocessor(data, False)
+            
+            # Move inputs tensor to the same device as the model (only needed for TORCH)
+            if isinstance(preprocessed_data, dict):
+                if 'inputs' in preprocessed_data and isinstance(preprocessed_data['inputs'], torch.Tensor):
+                    preprocessed_data['inputs'] = preprocessed_data['inputs'].to(self.device)
+            
+            return preprocessed_data
             
         if self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
             # TODO: implement later with json input
             raise NotImplementedError
         
-        data_preprocessor = MODELS.build(data_preprocessor_cfg)
+
+    def _forward(self, data: Union[dict, tuple, list]) -> list:
+        """forward data through backend (Torch / ONNX / TensorRT)."""
         
-        return data_preprocessor(data, False)
+        if self.backend == Backend.TORCH:
+            out_data = self.model._run_forward(data, mode='predict') 
+
+        return out_data
         
 
-    # @abstractmethod
-    # def _forward(self, batch: Any) -> Any:
-    #     """forward data through backend (Torch / ONNX / TensorRT)."""
-    #     ...
+    def _postprocess(self, raw_outputs: Any):
+        """
+        Convert raw output of prediction to final results (mask, v.v).
+        """
         
-    # @abstractmethod
-    # def _postprocess(self, raw_output: Any):
-    #     """
-    #     Convert raw output of prediction to final results (mask, v.v).
-    #     """
-    #     ...   
+        return raw_outputs
              
-    
     def predict(self, imgs: Union[np.ndarray, Sequence[np.ndarray]]):
         """
         Run inference on one or a batch of images
@@ -183,10 +191,17 @@ class BasePredictor(ABC):
         Returns:
             - output for single input, or list of outputs for batch
         """
-        batch = self._preprocess(imgs)
-        raw = self._forward(batch)
-        outputs = self._postprocess(raw)
+        
+        data, is_batch = self._prepare_data(imgs)
+        
+        with torch.no_grad():
+            preprocessed_data = self._preprocess(data)
+            results = self._forward(preprocessed_data)
+            raw_outputs = results if is_batch else results[0]
+            
+        outputs = self._postprocess(raw_outputs)
         return outputs
+    
     
 
 class SegPredictor(BasePredictor):
