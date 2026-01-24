@@ -8,6 +8,7 @@ import torch
 
 import mmseg
 from mmengine.dataset import Compose
+from mmengine.registry import MODELS
 
 class Backend(str, Enum):
     TORCH = "torch"
@@ -63,9 +64,30 @@ class BasePredictor(ABC):
             raise NotImplementedError
         
     
-    def _prepare_data(self, imgs: Union[np.ndarray, Sequence[np.ndarray]]):
+    def _prepare_data(
+        self, 
+        imgs: Union[np.ndarray, Sequence[np.ndarray]]
+    ) -> tuple(Union[dict, tuple, list], bool) :
         """
+        Prepare input images by applying test pipeline transforms.
+        
+        This method sets up the appropriate test pipeline based on the backend,
+        applies image transforms (e.g., Resize, LoadImageFromNDArray), and 
+        structures the data for further processing. Note that model-specific 
+        preprocessing (normalization, tensor conversion) is handled separately 
+        in _preprocess().
+        
+        Args:
+            imgs: Input image(s) to prepare. Can be:
+                - np.ndarray: Single image as a numpy array (HWC format)
+                - Sequence[np.ndarray]: List or tuple of numpy arrays for batch processing
+        
+        Returns:
+            tuple: A tuple containing:
+                - data (dict): Processed data dictionary with 'inputs' and 'data_samples' keys
+                - is_batch (bool): True if input was a batch (list/tuple), False if single image
         """
+        
         test_pipeline = []
         if self.backend == Backend.TORCH:
             
@@ -104,12 +126,37 @@ class BasePredictor(ABC):
 
         return data, is_batch
         
-    def _preprocess(
-        self,
-        imgs: Union[np.ndarray, Sequence[np.ndarray]],
-    ) -> Any:
-        """Convert raw images (HWC np.ndarray) -> batch input for backend."""
-        pass
+    def _preprocess(self, data: Union[dict, tuple, list]) -> Union[dict, tuple, list]:
+        """
+        Apply model-specific preprocessing to prepared data.
+        
+        This method applies the data preprocessor (normalization, tensor conversion,
+        channel reordering, etc.) to data that has been prepared by _prepare_data().
+        The data preprocessor is built from the model configuration and handles
+        the final transformations needed before model inference.
+        
+        Args:
+            data: Prepared data from _prepare_data(). Can be:
+                - dict: Data dictionary with 'inputs' and 'data_samples' keys
+                - tuple: Tuple of (inputs, data_samples)
+                - list: List of data items
+        
+        Returns:
+            Preprocessed data ready for model inference. Format matches input format
+            (dict, tuple, or list) but with normalized tensors and proper formatting.
+        """
+        
+        if self.backend == Backend.TORCH:
+            data_preprocessor_cfg = self.cfg['data_preprocessor']
+            
+        if self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
+            # TODO: implement later with json input
+            raise NotImplementedError
+        
+        data_preprocessor = MODELS.build(data_preprocessor_cfg)
+        
+        return data_preprocessor(data, False)
+        
 
     # @abstractmethod
     # def _forward(self, batch: Any) -> Any:
