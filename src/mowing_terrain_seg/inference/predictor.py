@@ -1,10 +1,11 @@
 from collections import defaultdict
-from typing import Any, Union, Sequence, Tuple
+from typing import Any, Union, Sequence, Tuple, Optional, List
 from abc import ABC, abstractmethod
 from enum import Enum
 
 import numpy as np
 import torch
+from PIL import ImageColor
 
 import mmseg
 from mmengine.dataset import Compose
@@ -197,7 +198,7 @@ class BasePredictor(ABC):
     def __call__(self, imgs: Union[np.ndarray, Sequence[np.ndarray]]):
         return self.predict(imgs)
     
-
+    
 class SegPredictor(BasePredictor):
     
     def __init__(self, cfg_uri: str, model_uri: str, backend: Backend, device: str ='cuda:0'):
@@ -213,7 +214,8 @@ class SegPredictor(BasePredictor):
             np.ndarray or list: Segmentation mask(s) as numpy array(s) of shape (H, W)
                 with class indices. Returns single array for single input, list for batch.
         """
-        return self._extract_masks(raw_outputs)
+        # return self._extract_masks(raw_outputs)
+        return raw_outputs
     
     def _extract_masks(self, raw_outputs):
         """Extract numpy mask arrays from MMSegmentation outputs.
@@ -252,23 +254,62 @@ class SegPredictor(BasePredictor):
         """
         return self._extract_masks(raw_outputs)
     
-    def visualize_mask(self, img: np.ndarray, mask: np.ndarray, opacity: float = 0.7) -> np.ndarray:
-        """Create overlay visualization of mask on image.
+    def visualize_mask(
+        self, 
+        img: np.ndarray, 
+        mask: np.ndarray, 
+        opacity: float = 0.7,
+        palette: Optional[Union[List[List[int]], List[Tuple[int, int, int]], List[str]]] = None
+    ) -> np.ndarray:
+        """Create overlay visualization of mask on image with class-specific colors.
         
         Args:
             img: Original image as numpy array (H, W, 3) in BGR format
             mask: Segmentation mask as numpy array (H, W) with class indices
             opacity: Overlay opacity between 0.0 and 1.0
+            palette: Optional list of colors for each class ID. Can be:
+                - List of RGB tuples/lists: [[R, G, B], [R, G, B], ...]
+                - List of color name strings: ['white', 'gray', 'green', ...]
+                Color name strings must be supported by PIL.ImageColor.
+                If None, uses default green color for all non-background pixels.
             
         Returns:
             np.ndarray: Overlay image with mask visualization
         """
         import cv2
         
-        # Create colored mask (you may want to use a colormap here)
-        # For now, simple visualization
-        colored_mask = np.zeros_like(img)
-        colored_mask[mask > 0] = [0, 255, 0]  # Green overlay for non-background
+        # Ensure mask is uint8
+        if mask.dtype != np.uint8:
+            mask = mask.astype(np.uint8)
+        
+        # Create colored mask from palette
+        if palette is not None:
+            # Convert palette to BGR colormap array
+            max_class_id = int(mask.max())
+            num_classes = len(palette)
+            
+            # Create colormap array (handle case where mask has more classes than palette)
+            colormap_array = np.zeros((max(max_class_id + 1, num_classes), 3), dtype=np.uint8)
+            
+            for class_id, color in enumerate(palette):
+                if class_id < len(colormap_array):
+                    # Check if color is a string (color name) or list/tuple (RGB)
+                    if isinstance(color, str):
+                        # Convert color name string to RGB using PIL ImageColor
+                        rgb = ImageColor.getrgb(color)
+                    else:
+                        # Assume it's a list or tuple of RGB values
+                        rgb = tuple(color)
+                    
+                    # Convert RGB to BGR for OpenCV
+                    colormap_array[class_id] = [rgb[2], rgb[1], rgb[0]]
+            
+            # Apply colormap: colored_mask[class_id] = colormap_array[class_id]
+            colored_mask = colormap_array[mask]
+        else:
+            # Default: green for all non-background pixels
+            colored_mask = np.zeros_like(img)
+            colored_mask[mask > 0] = [0, 255, 0]  # Green overlay for non-background
         
         # Blend with original image
         overlay = cv2.addWeighted(img, 1 - opacity, colored_mask, opacity, 0)
