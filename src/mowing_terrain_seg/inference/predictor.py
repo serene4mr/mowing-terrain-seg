@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import Any, Union, Sequence
+from typing import Any, Union, Sequence, Tuple
 from abc import ABC, abstractmethod
 from enum import Enum
 
@@ -28,13 +28,8 @@ class BasePredictor(ABC):
         
         self.model = None # placeholder for model
         self.cfg = None # placeholder for cfg
-        
-        print(self.backend)
-        
+
         self._load_model()
-        
-    def __call__(self):
-        pass
         
     def _load_model(self) -> None:
         """
@@ -51,13 +46,21 @@ class BasePredictor(ABC):
             def patched_load(*args, **kwargs):
                 kwargs['weights_only'] = False
                 return original_load(*args, **kwargs)
-            torch.load = patched_load
+
+            try:
+                torch.load = patched_load
             
-            self.model = init_model(
-                config = self.cfg,
-                checkpoint=self.model_uri,
-                device=self.device
-            )
+                self.model = init_model(
+                    config = self.cfg,
+                    checkpoint=self.model_uri,
+                    device=self.device
+                )
+            finally:
+                torch.load = original_load
+                
+            data_preprocessor_cfg = self.cfg['data_preprocessor']
+            self.data_preprocessor = MODELS.build(data_preprocessor_cfg)
+            self.data_preprocessor.to(self.device)
             
         if self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
             # TODO: implement later
@@ -67,7 +70,7 @@ class BasePredictor(ABC):
     def _prepare_data(
         self, 
         imgs: Union[np.ndarray, Sequence[np.ndarray]]
-    ) -> (Union[dict, tuple, list], bool) :
+    ) -> Tuple[Union[dict, tuple, list], bool]:
         """
         Prepare input images by applying test pipeline transforms.
         
@@ -90,11 +93,9 @@ class BasePredictor(ABC):
         
         test_pipeline = []
         if self.backend == Backend.TORCH:
-            
-            test_pipeline = self.cfg.test_pipeline
-            for t in test_pipeline:
-                if t.get('type') == 'LoadAnnotations':
-                    test_pipeline.remove(t)
+            test_pipeline = self.cfg.test_pipeline.copy()  # Copy to avoid modifying original
+            # Filter out LoadAnnotations transforms
+            test_pipeline = [t for t in test_pipeline if t.get('type') != 'LoadAnnotations']
         
         if self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
             # test_pipeline = [
@@ -146,37 +147,28 @@ class BasePredictor(ABC):
             (dict, tuple, or list) but with normalized tensors and proper formatting.
         """
         
-        if self.backend == Backend.TORCH:
-            data_preprocessor_cfg = self.cfg['data_preprocessor']
-            data_preprocessor = MODELS.build(data_preprocessor_cfg)
-            preprocessed_data = data_preprocessor(data, False)
-            
-            # Move inputs tensor to the same device as the model (only needed for TORCH)
-            if isinstance(preprocessed_data, dict):
-                if 'inputs' in preprocessed_data and isinstance(preprocessed_data['inputs'], torch.Tensor):
-                    preprocessed_data['inputs'] = preprocessed_data['inputs'].to(self.device)
-            
-            return preprocessed_data
-            
-        if self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
-            # TODO: implement later with json input
-            raise NotImplementedError
+        preprocessed_data = self.data_preprocessor(data, False)
+        
+        return preprocessed_data
         
 
     def _forward(self, data: Union[dict, tuple, list]) -> list:
         """forward data through backend (Torch / ONNX / TensorRT)."""
         
         if self.backend == Backend.TORCH:
-            out_data = self.model._run_forward(data, mode='predict') 
-
-        return out_data
+            out_data = self.model._run_forward(data, mode='predict')
+            return out_data
+        elif self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
+            # TODO: implement later
+            raise NotImplementedError(f"Backend {self.backend} not yet implemented")
+        else:
+            raise ValueError(f"Unknown backend: {self.backend}")
         
 
     def _postprocess(self, raw_outputs: Any):
         """
         Convert raw output of prediction to final results (mask, v.v).
         """
-        
         return raw_outputs
              
     def predict(self, imgs: Union[np.ndarray, Sequence[np.ndarray]]):
@@ -202,6 +194,8 @@ class BasePredictor(ABC):
         outputs = self._postprocess(raw_outputs)
         return outputs
     
+    def __call__(self, imgs: Union[np.ndarray, Sequence[np.ndarray]]):
+        return self.predict(imgs)
     
 
 class SegPredictor(BasePredictor):
@@ -209,11 +203,75 @@ class SegPredictor(BasePredictor):
     def __init__(self, cfg_uri: str, model_uri: str, backend: Backend, device: str ='cuda:0'):
         super().__init__(cfg_uri, model_uri, backend, device)
         
+    def _postprocess(self, raw_outputs):
+        """Extract segmentation masks from raw MMSegmentation outputs.
         
-        
-        
+        Args:
+            raw_outputs: MMSegmentation data sample(s) containing prediction results
+            
+        Returns:
+            np.ndarray or list: Segmentation mask(s) as numpy array(s) of shape (H, W)
+                with class indices. Returns single array for single input, list for batch.
+        """
+        return self._extract_masks(raw_outputs)
     
+    def _extract_masks(self, raw_outputs):
+        """Extract numpy mask arrays from MMSegmentation outputs.
         
+        Args:
+            raw_outputs: MMSegmentation data sample(s) with pred_sem_seg attribute
+            
+        Returns:
+            np.ndarray or list: Segmentation mask(s) as numpy array(s)
+        """
+        # Handle single output (data sample)
+        if hasattr(raw_outputs, 'pred_sem_seg') and raw_outputs.pred_sem_seg is not None:
+            mask = raw_outputs.pred_sem_seg.data.cpu().numpy()
+            # Remove batch dimension if present (shape: [1, H, W] -> [H, W])
+            if len(mask.shape) == 3:
+                mask = mask[0]
+            return mask
+        elif hasattr(raw_outputs, 'pred_instances'):
+            # Handle instance segmentation outputs
+            # For now, return the raw output - can be extended later
+            return raw_outputs
+        else:
+            raise ValueError(
+                f"No segmentation mask found in output. "
+                f"Available attributes: {dir(raw_outputs)}"
+            )
+    
+    def get_mask_array(self, raw_outputs):
+        """Public API: Get mask as numpy array from raw outputs.
         
+        Args:
+            raw_outputs: MMSegmentation data sample(s)
+            
+        Returns:
+            np.ndarray: Segmentation mask as numpy array
+        """
+        return self._extract_masks(raw_outputs)
+    
+    def visualize_mask(self, img: np.ndarray, mask: np.ndarray, opacity: float = 0.7) -> np.ndarray:
+        """Create overlay visualization of mask on image.
+        
+        Args:
+            img: Original image as numpy array (H, W, 3) in BGR format
+            mask: Segmentation mask as numpy array (H, W) with class indices
+            opacity: Overlay opacity between 0.0 and 1.0
+            
+        Returns:
+            np.ndarray: Overlay image with mask visualization
+        """
+        import cv2
+        
+        # Create colored mask (you may want to use a colormap here)
+        # For now, simple visualization
+        colored_mask = np.zeros_like(img)
+        colored_mask[mask > 0] = [0, 255, 0]  # Green overlay for non-background
+        
+        # Blend with original image
+        overlay = cv2.addWeighted(img, 1 - opacity, colored_mask, opacity, 0)
+        return overlay
         
     
