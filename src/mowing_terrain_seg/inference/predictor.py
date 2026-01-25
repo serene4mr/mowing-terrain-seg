@@ -1,10 +1,10 @@
 from collections import defaultdict
 from typing import Any, Union, Sequence, Tuple, Optional, List
-from abc import ABC, abstractmethod
 from enum import Enum
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import ImageColor
 
 import mmseg
@@ -16,16 +16,36 @@ class Backend(str, Enum):
     ONNX = "onnx"
     TENSORRT = "tensorrt"
 
-class BasePredictor(ABC):
-    def __init__(self, cfg_uri: str, model_uri: str, backend: Backend, device: str = 'cuda:0'):
+class BasePredictor:
+    def __init__(
+        self, 
+        cfg_uri: str, 
+        model_uri: str, 
+        backend: Backend, 
+        device: str = 'cuda:0',
+        conf_thresholds: Optional[Union[float, List[float]]] = None
+    ):
         """
+        Initialize BasePredictor.
         
+        Args:
+            cfg_uri: Path to model configuration file
+            model_uri: Path to model checkpoint file
+            backend: Backend type (TORCH, ONNX, TENSORRT)
+            device: Device to run inference on (default: 'cuda:0')
+            conf_thresholds: Optional confidence threshold(s) per class.
+                Can be:
+                - A single float: applies the same threshold to all classes
+                - A list of floats: applies per-class thresholds
+                If provided, predictions with confidence below threshold for their class
+                will be filtered. Implementation is task-specific and handled by subclasses.
         """
         
         self.cfg_uri = cfg_uri
         self.model_uri = model_uri # checkpoint path in term of torch backend
         self.backend = backend
         self.device = device
+        self.conf_thresholds = conf_thresholds
         
         self.model = None # placeholder for model
         self.cfg = None # placeholder for cfg
@@ -201,24 +221,161 @@ class BasePredictor(ABC):
     
 class SegPredictor(BasePredictor):
     
-    def __init__(self, cfg_uri: str, model_uri: str, backend: Backend, device: str ='cuda:0'):
-        super().__init__(cfg_uri, model_uri, backend, device)
+    def __init__(
+        self, 
+        cfg_uri: str, 
+        model_uri: str, 
+        backend: Backend, 
+        device: str = 'cuda:0',
+        conf_thresholds: Optional[Union[float, List[float]]] = None
+    ):
+        """
+        Initialize SegPredictor with optional confidence thresholds.
+        
+        Args:
+            cfg_uri: Path to model configuration file
+            model_uri: Path to model checkpoint file
+            backend: Backend type (TORCH, ONNX, TENSORRT)
+            device: Device to run inference on (default: 'cuda:0')
+            conf_thresholds: Optional confidence threshold(s) per class.
+                Can be:
+                - A single float: applies the same threshold to all classes
+                - A list of floats: applies per-class thresholds
+                If provided, pixels with confidence below threshold for their class
+                will be set to 255 (indicating uncertain/filtered pixels).
+        """
+        super().__init__(cfg_uri, model_uri, backend, device, conf_thresholds)
         
     def _postprocess(self, raw_outputs):
         """Extract segmentation masks from raw MMSegmentation outputs.
         
+        This method handles both single and batch outputs, extracts masks,
+        and optionally applies confidence thresholding.
+        
         Args:
-            raw_outputs: MMSegmentation data sample(s) containing prediction results
+            raw_outputs: MMSegmentation data sample(s) containing prediction results.
+                Can be a single data sample or a list of data samples.
             
         Returns:
             np.ndarray or list: Segmentation mask(s) as numpy array(s) of shape (H, W)
                 with class indices. Returns single array for single input, list for batch.
         """
-        # return self._extract_masks(raw_outputs)
-        return raw_outputs
+        # Check if batch (list) or single output
+        is_batch = isinstance(raw_outputs, (list, tuple))
+        
+        if is_batch:
+            # Process each output in the batch
+            masks = []
+            for output in raw_outputs:
+                mask = self._extract_single_mask(output)
+                if self.conf_thresholds is not None:
+                    mask = self._apply_confidence_threshold(mask, output)
+                masks.append(mask)
+            return masks
+        else:
+            # Process single output
+            mask = self._extract_single_mask(raw_outputs)
+            if self.conf_thresholds is not None:
+                mask = self._apply_confidence_threshold(mask, raw_outputs)
+            return mask
+    
+    def _extract_single_mask(self, raw_output):
+        """Extract a single mask from a MMSegmentation output.
+        
+        Args:
+            raw_output: Single MMSegmentation data sample with pred_sem_seg attribute
+            
+        Returns:
+            np.ndarray: Segmentation mask as numpy array of shape (H, W)
+        """
+        if hasattr(raw_output, 'pred_sem_seg') and raw_output.pred_sem_seg is not None:
+            mask = raw_output.pred_sem_seg.data.cpu().numpy()
+            # Remove batch dimension if present (shape: [1, H, W] -> [H, W])
+            if len(mask.shape) == 3:
+                mask = mask[0]
+            return mask
+        elif hasattr(raw_output, 'pred_instances'):
+            # Handle instance segmentation outputs
+            # For now, return the raw output - can be extended later
+            return raw_output
+        else:
+            raise ValueError(
+                f"No segmentation mask found in output. "
+                f"Available attributes: {dir(raw_output)}"
+            )
+    
+    def _compute_confidence_scores(self, raw_output):
+        """Compute confidence scores from logits.
+        
+        Args:
+            raw_output: MMSegmentation data sample with seg_logits attribute
+            
+        Returns:
+            np.ndarray or None: Confidence scores array of shape (H, W) with max probability 
+                per pixel, or None if logits are not available
+        """
+        if not hasattr(raw_output, 'seg_logits') or raw_output.seg_logits is None:
+            return None
+        
+        # Extract logits and convert to probabilities
+        logits = raw_output.seg_logits.data.cpu().numpy()
+        # logits shape is [num_classes, height, width] - no batch dimension
+        
+        # Convert to probabilities using softmax
+        logits_tensor = torch.from_numpy(logits)
+        probs = F.softmax(logits_tensor, dim=0).numpy()
+        confidence_scores = np.max(probs, axis=0)
+        
+        return confidence_scores
+    
+    def _apply_confidence_threshold(self, mask: np.ndarray, raw_output) -> np.ndarray:
+        """Apply confidence threshold filtering to segmentation mask.
+        
+        Args:
+            mask: Segmentation mask as numpy array (H, W) with class indices
+            raw_output: MMSegmentation data sample with seg_logits attribute
+            
+        Returns:
+            np.ndarray: Filtered mask with low-confidence pixels set to 255.
+                255 indicates uncertain/filtered pixels that should be rendered as black.
+        """
+        if self.conf_thresholds is None:
+            return mask
+        
+        # Get confidence scores
+        confidence_scores = self._compute_confidence_scores(raw_output)
+        if confidence_scores is None:
+            # No logits available, return mask unchanged
+            return mask
+        
+        # Ensure mask dtype can handle 255 (uint8 or larger)
+        if mask.dtype != np.uint8:
+            mask = mask.astype(np.uint8)
+        
+        # Normalize thresholds: if single value, apply to all classes
+        if isinstance(self.conf_thresholds, (int, float)):
+            max_class_id = int(mask.max()) if mask.size > 0 else 0
+            thresholds = [self.conf_thresholds] * (max_class_id + 1)
+        else:
+            thresholds = self.conf_thresholds
+        
+        # Create filtered mask
+        filtered_mask = mask.copy()
+        
+        # Apply threshold for each class
+        for class_id, threshold in enumerate(thresholds):
+            if class_id > mask.max():
+                continue  # Skip if class_id doesn't exist in mask
+            class_mask = (mask == class_id)
+            low_confidence = (confidence_scores < threshold) & class_mask
+            filtered_mask[low_confidence] = 255  # Mark as uncertain/filtered
+        
+        return filtered_mask
     
     def _extract_masks(self, raw_outputs):
         """Extract numpy mask arrays from MMSegmentation outputs.
+        
+        This is a legacy method for backward compatibility. Use _postprocess instead.
         
         Args:
             raw_outputs: MMSegmentation data sample(s) with pred_sem_seg attribute
@@ -226,22 +383,11 @@ class SegPredictor(BasePredictor):
         Returns:
             np.ndarray or list: Segmentation mask(s) as numpy array(s)
         """
-        # Handle single output (data sample)
-        if hasattr(raw_outputs, 'pred_sem_seg') and raw_outputs.pred_sem_seg is not None:
-            mask = raw_outputs.pred_sem_seg.data.cpu().numpy()
-            # Remove batch dimension if present (shape: [1, H, W] -> [H, W])
-            if len(mask.shape) == 3:
-                mask = mask[0]
-            return mask
-        elif hasattr(raw_outputs, 'pred_instances'):
-            # Handle instance segmentation outputs
-            # For now, return the raw output - can be extended later
-            return raw_outputs
+        # Handle batch case
+        if isinstance(raw_outputs, (list, tuple)):
+            return [self._extract_single_mask(output) for output in raw_outputs]
         else:
-            raise ValueError(
-                f"No segmentation mask found in output. "
-                f"Available attributes: {dir(raw_outputs)}"
-            )
+            return self._extract_single_mask(raw_outputs)
     
     def get_mask_array(self, raw_outputs):
         """Public API: Get mask as numpy array from raw outputs.
@@ -301,15 +447,26 @@ class SegPredictor(BasePredictor):
                         # Assume it's a list or tuple of RGB values
                         rgb = tuple(color)
                     
+                    # Raise warning if palette contains black (reserved for background)
+                    if rgb == (0, 0, 0):
+                        import logging
+                        logging.warning(
+                            f"Class ID {class_id} is assigned black (0, 0, 0) in the palette. "
+                            f"This conflicts with the reserved background/filtered color."
+                        )
+
                     # Convert RGB to BGR for OpenCV
                     colormap_array[class_id] = [rgb[2], rgb[1], rgb[0]]
             
             # Apply colormap: colored_mask[class_id] = colormap_array[class_id]
             colored_mask = colormap_array[mask]
         else:
-            # Default: green for all non-background pixels
+            # Default: green for all valid classes (excluding filtered pixels 255)
             colored_mask = np.zeros_like(img)
-            colored_mask[mask > 0] = [0, 255, 0]  # Green overlay for non-background
+            # Only color pixels that are not filtered (255). 
+            # Note: class 0 is treated as a valid class.
+            valid_pixels = (mask < 255)
+            colored_mask[valid_pixels] = [0, 255, 0]  # Green overlay for valid classes
         
         # Blend with original image
         overlay = cv2.addWeighted(img, 1 - opacity, colored_mask, opacity, 0)
