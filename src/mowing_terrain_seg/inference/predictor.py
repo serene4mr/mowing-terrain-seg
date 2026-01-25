@@ -11,6 +11,8 @@ import mmseg
 from mmengine.dataset import Compose
 from mmengine.registry import MODELS
 
+from src.mowing_terrain_seg.utils.logger import LOGGER
+
 class Backend(str, Enum):
     TORCH = "torch"
     ONNX = "onnx"
@@ -49,6 +51,8 @@ class BasePredictor:
         
         self.model = None # placeholder for model
         self.cfg = None # placeholder for cfg
+        
+        self.num_classes = None
 
         self._load_model()
         
@@ -61,6 +65,8 @@ class BasePredictor:
             from mmseg.apis.inference import init_model
             
             self.cfg = Config.fromfile(self.cfg_uri)
+            
+            self.num_classes = self.cfg['num_classes']
             
             # Temporarily monkey patch torch.load to use weights_only=False
             original_load = torch.load
@@ -345,17 +351,19 @@ class SegPredictor(BasePredictor):
         # Get confidence scores
         confidence_scores = self._compute_confidence_scores(raw_output)
         if confidence_scores is None:
-            # No logits available, return mask unchanged
+            LOGGER.warning(
+                "Confidence thresholds provided but no seg_logits found in model output. "
+                "Thresholding will be skipped."
+            )
             return mask
         
         # Ensure mask dtype can handle 255 (uint8 or larger)
         if mask.dtype != np.uint8:
             mask = mask.astype(np.uint8)
-        
+
         # Normalize thresholds: if single value, apply to all classes
         if isinstance(self.conf_thresholds, (int, float)):
-            max_class_id = int(mask.max()) if mask.size > 0 else 0
-            thresholds = [self.conf_thresholds] * (max_class_id + 1)
+            thresholds = [self.conf_thresholds] * self.num_classes
         else:
             thresholds = self.conf_thresholds
         
@@ -364,8 +372,8 @@ class SegPredictor(BasePredictor):
         
         # Apply threshold for each class
         for class_id, threshold in enumerate(thresholds):
-            if class_id > mask.max():
-                continue  # Skip if class_id doesn't exist in mask
+            if class_id >= self.num_classes:
+                continue
             class_mask = (mask == class_id)
             low_confidence = (confidence_scores < threshold) & class_mask
             filtered_mask[low_confidence] = 255  # Mark as uncertain/filtered
@@ -427,6 +435,10 @@ class SegPredictor(BasePredictor):
         # Ensure mask is uint8
         if mask.dtype != np.uint8:
             mask = mask.astype(np.uint8)
+        
+        # Ensure spatial dimensions match (resize mask if necessary)
+        if mask.shape[:2] != img.shape[:2]:
+            mask = cv2.resize(mask, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
         
         # Create colored mask from palette
         if palette is not None:
