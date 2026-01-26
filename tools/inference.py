@@ -93,7 +93,7 @@ def main():
     # Placeholder for video writer
     video_writer = None
     is_temporal = source.type in [
-        SourceType.VIDEO_FILE, SourceType.VIDEO_DIR, 
+        SourceType.VIDEO_FILE, 
         SourceType.CAMERA_ID, SourceType.STREAM_URL
     ]
 

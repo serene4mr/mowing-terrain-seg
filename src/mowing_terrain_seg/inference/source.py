@@ -11,7 +11,6 @@ class SourceType(Enum):
     IMAGE_FILE = "image_file"
     IMAGE_DIR = "image_dir"
     VIDEO_FILE = "video_file"
-    VIDEO_DIR = "video_dir"
     CAMERA_ID = "camera_id"
     STREAM_URL = "stream_url"
 
@@ -54,13 +53,6 @@ class InferenceSource:
 
         # 3. Directories
         if os.path.isdir(str(src)):
-            # Logic: If it's a directory, check if it contains primarily videos or images
-            files = [f.lower() for f in os.listdir(src)]
-            video_exts = ('.mp4', '.avi', '.mkv', '.mov')
-            
-            # If the directory contains video files, we might treat it as a VIDEO_DIR
-            if any(f.endswith(video_exts) for f in files):
-                return SourceType.VIDEO_DIR
             return SourceType.IMAGE_DIR
 
         # 4. Files
@@ -105,18 +97,6 @@ class InferenceSource:
             else:
                 # Streams/Cameras are effectively infinite
                 self.total_count = -1 
-
-        elif self.type == SourceType.VIDEO_DIR:
-            # Handle directory containing video files (process first video found for now)
-            video_exts = ('.mp4', '.avi', '.mkv', '.mov')
-            videos = sorted([
-                os.path.join(self.src, f) for f in os.listdir(self.src)
-                if f.lower().endswith(video_exts)
-            ])
-            if not videos:
-                raise FileNotFoundError(f"No video files found in {self.src}")
-            self.cap = cv2.VideoCapture(videos[0])
-            self.total_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     def __del__(self):
         self.close()
@@ -189,7 +169,7 @@ class InferenceSource:
                     break
 
             # 3. Read from Capture (Video/Stream/Camera)
-            elif self.type in [SourceType.VIDEO_FILE, SourceType.VIDEO_DIR, SourceType.CAMERA_ID, SourceType.STREAM_URL]:
+            elif self.type in [SourceType.VIDEO_FILE, SourceType.CAMERA_ID, SourceType.STREAM_URL]:
                 if self.cap is not None:
                     ret, frame = self.cap.read()
                     if not ret:
