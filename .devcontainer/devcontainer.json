@@ -12,13 +12,15 @@
   "updateRemoteUserUID": true,
 
   "runArgs": [
+    "--privileged",
     "--name", "mowing-terrain-seg-dev-env",
     "--net", "host",
     "--gpus", "all",
     "--shm-size=16g",
     "-e", "PYTHONUNBUFFERED=1",
     "-e", "DISPLAY=:0",
-    "-v", "/tmp/.X11-unix:/tmp/.X11-unix:rw"
+    "-v", "/tmp/.X11-unix:/tmp/.X11-unix:rw",
+    "-v", "/dev:/dev"
   ],
 
   "postCreateCommand": "bash -c 'apt-get update && apt-get install -y git libgl1 libglib2.0-0 sudo && if ! id -u serene > /dev/null 2>&1; then useradd -m -s /bin/bash serene && echo \"serene ALL=(ALL) NOPASSWD:ALL\" >> /etc/sudoers; fi && pip install -r requirements.txt'",

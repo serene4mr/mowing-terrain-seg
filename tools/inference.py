@@ -1,13 +1,20 @@
 import argparse
 import os
 import sys
-from pathlib import Path
+import time
 from datetime import datetime
+from pathlib import Path
 
-# Add src directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+import cv2
+import numpy as np
+import torch
+from tqdm import tqdm
+
+# Add project root to sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.mowing_terrain_seg.inference.predictor import SegPredictor, Backend
+from src.mowing_terrain_seg.inference.source import InferenceSource, SourceType
 from src.mowing_terrain_seg.utils.logger import LOGGER
 
 
@@ -15,71 +22,218 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Mowing Terrain Segmentation Inference')
     
     # Model arguments
-    parser.add_argument('--cfg-uri', '--cfg', dest='cfg_uri', required=True, 
-                        help='Path to necessary config (.py or pipeline.json)')
-    parser.add_argument('--model-uri', '--model', dest='model_uri', required=True, 
-                        help='Path to model (e.g., .pth, .onnx, or .engine)')
-    parser.add_argument('--input', '-i', required=True, help='Path to input image/video/directory')
-    parser.add_argument('--output-dir', '-o', default='results/', help='Directory to save results')
+    model_group = parser.add_argument_group('Model Configuration')
+    model_group.add_argument('--cfg-uri', '-c', required=True, 
+                             help='Path to model config file (.py or pipeline.json)')
+    model_group.add_argument('--model-uri', '-m', required=True, 
+                             help='Path to model weights/checkpoint file (.pth, .onnx, or .engine)')
+    model_group.add_argument('--backend', '-b', type=str, default='torch', 
+                        choices=['torch', 'onnx', 'tensorrt'], help='Inference backend')
+    model_group.add_argument('--device', default='cuda:0', help='Device used for inference')
+
+    # Data I/O arguments
+    data_group = parser.add_argument_group('Data I/O')
+    data_group.add_argument('--input', '-i', required=True, 
+                            help='Path to input image/video/directory/camera_id/stream_url')
+    data_group.add_argument('--output-dir', '-o', default='work_dirs/inference', 
+                            help='Root directory to save results')
+    data_group.add_argument('--batch-size', type=int, default=1, help='Batch size for inference')
 
     # Predictor settings
-    parser.add_argument('--backend', '-b', type=str, default='torch', 
-                        choices=['torch', 'onnx', 'tensorrt'], help='Inference backend')
-    parser.add_argument('--device', default='cuda:0', help='Device used for inference')
-    parser.add_argument('--conf-threshold', type=str, default=None,
-                        help='Confidence threshold (float or comma-separated list)')
+    logic_group = parser.add_argument_group('Inference Logic')
+    logic_group.add_argument('--conf-threshold', type=float, nargs='+', default=None,
+                        help='Confidence threshold (single float or per-class list)')
 
     # Visualization/Output settings
-    parser.add_argument('--batch-size', type=int, default=1, help='Batch size for inference')
-    parser.add_argument('--opacity', type=float, default=0.7, help='Overlay opacity (0-1)')
-    parser.add_argument('--show', action='store_true', help='Show results in a window')
-    parser.add_argument('--save-vis', action='store_true', default=True, help='Save visualization results (default: True)')
-    parser.add_argument('--no-save-vis', dest='save_vis', action='store_false', help='Do not save visualization results')
-    parser.add_argument('--save-mask', action='store_true', help='Save raw prediction masks (.png)')
-    parser.add_argument('--overlay-fps', action='store_true', help='Overlay FPS on visualization')
+    vis_group = parser.add_argument_group('Visualization & Export')
+    vis_group.add_argument('--show', action='store_true', help='Show results in a window')
+    vis_group.add_argument('--opacity', type=float, default=0.7, help='Overlay opacity (0-1)')
+    vis_group.add_argument('--save-vis', action='store_true', default=True, help='Save visualized results')
+    vis_group.add_argument('--no-save-vis', action='store_false', dest='save_vis', help='Do not save visualized results')
+    vis_group.add_argument('--save-mask', action='store_true', help='Save raw prediction masks as .png')
+    vis_group.add_argument('--overlay-fps', action='store_true', help='Draw FPS overlay on results')
 
     return parser.parse_args()
+
+
+class InferenceTimer:
+    def __init__(self, device='cuda:0'):
+        self.device = device
+        self.is_cuda = 'cuda' in device
+        self.pre_times = []
+        self.infer_times = []
+        self.post_times = []
+        self.total_times = []
+        self.start_tick = 0
+
+    def synchronize(self):
+        if self.is_cuda:
+            torch.cuda.synchronize()
+
+    def tick(self):
+        self.synchronize()
+        return time.time()
+
+    def record(self, pre, infer, post):
+        self.pre_times.append(pre)
+        self.infer_times.append(infer)
+        self.post_times.append(post)
+        self.total_times.append(pre + infer + post)
+
+    def get_avg_fps(self):
+        if not self.total_times:
+            return 0
+        return 1.0 / (sum(self.total_times) / len(self.total_times))
+
+    def get_stats(self):
+        if not self.total_times:
+            return {}
+        n = len(self.total_times)
+        return {
+            'avg_pre': sum(self.pre_times) / n * 1000,
+            'avg_infer': sum(self.infer_times) / n * 1000,
+            'avg_post': sum(self.post_times) / n * 1000,
+            'avg_total': sum(self.total_times) / n * 1000,
+            'avg_fps': self.get_avg_fps(),
+            'p99_latency': np.percentile(self.total_times, 99) * 1000
+        }
 
 
 def main():
     args = parse_args()
     
-    # 1. Setup Output Directory
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_path = Path(args.output_dir) / timestamp
-    output_path.mkdir(parents=True, exist_ok=True)
+    # 1. Initialize Run Directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join(args.output_dir, timestamp)
+    os.makedirs(run_dir, exist_ok=True)
     
-    LOGGER.info(f"Results will be saved to: {output_path}")
+    vis_dir = os.path.join(run_dir, 'vis')
+    mask_dir = os.path.join(run_dir, 'masks')
     
-    # 2. Parse confidence thresholds
-    conf_thresholds = None
-    if args.conf_threshold:
-        try:
-            if ',' in args.conf_threshold:
-                conf_thresholds = [float(x.strip()) for x in args.conf_threshold.split(',')]
-            else:
-                conf_thresholds = float(args.conf_threshold)
-        except ValueError:
-            LOGGER.error(f"Invalid confidence threshold format: {args.conf_threshold}")
-            sys.exit(1)
+    if args.save_vis:
+        os.makedirs(vis_dir, exist_ok=True)
+    if args.save_mask:
+        os.makedirs(mask_dir, exist_ok=True)
+        
+    LOGGER.info(f"Initialized inference run: {run_dir}")
+    
+    # 2. Initialize Predictor
+    predictor = SegPredictor(
+        cfg_uri=args.cfg_uri,
+        model_uri=args.model_uri,
+        backend=Backend(args.backend),
+        device=args.device,
+        conf_thresholds=args.conf_threshold
+    )
+    
+    # 3. Initialize Source
+    source = InferenceSource(src=args.input, batch_size=args.batch_size)
+    timer = InferenceTimer(device=args.device)
+    
+    LOGGER.info(f"Source type: {source.type.value}, Batch size: {args.batch_size}")
+    
+    # Placeholder for video writer
+    video_writer = None
+    is_temporal = source.type in [
+        SourceType.VIDEO_FILE, SourceType.VIDEO_DIR, 
+        SourceType.CAMERA_ID, SourceType.STREAM_URL
+    ]
 
-    # 3. Initialize Predictor
-    LOGGER.info(f"Initializing predictor with backend: {args.backend}")
+    # 4. Main Inference Loop
     try:
-        predictor = SegPredictor(
-            cfg_uri=args.cfg_uri,
-            model_uri=args.model_uri,
-            backend=Backend(args.backend),
-            device=args.device,
-            conf_thresholds=conf_thresholds
-        )
-    except Exception as e:
-        LOGGER.error(f"Failed to initialize predictor: {e}")
-        sys.exit(1)
-    
-    LOGGER.info("Predictor initialized successfully.")
-    
-    # TODO: Phase 2 - Implement Input Loader and Processing Loop
+        for imgs, metas in tqdm(source, desc="Inference"):
+            t0 = timer.tick()
+            
+            # Predict handles pre-process, forward, and post-process
+            masks = predictor.predict(imgs)
+            
+            t1 = timer.tick()
+            # Average inference time per image in the batch
+            infer_time_per_img = (t1 - t0) / len(imgs) if imgs else 0
+            
+            # B. Visualization and Saving
+            t2 = timer.tick()
+            for i, (img, mask, meta) in enumerate(zip(imgs, masks, metas)):
+                vis_img = predictor.visualize_mask(img, mask, opacity=args.opacity)
+                
+                if args.overlay_fps:
+                    fps = timer.get_avg_fps()
+                    cv2.putText(vis_img, f"FPS: {fps:.1f}", (10, 30), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                
+                if args.show:
+                    cv2.imshow('Mowing Terrain Segmentation', vis_img)
+                    is_static = source.type in [SourceType.IMAGE_FILE, SourceType.IMAGE_DIR]
+                    wait_time = 0 if is_static else 1
+                    if cv2.waitKey(wait_time) & 0xFF == ord('q'):
+                        LOGGER.info("Quit by user ('q' pressed).")
+                        return
+
+                # --- Saving Logic ---
+                filename = meta['name']
+                
+                # Save Raw Mask
+                if args.save_mask:
+                    mask_path = os.path.join(mask_dir, filename.replace('.jpg', '.png'))
+                    cv2.imwrite(mask_path, mask)
+                
+                # Save Visualization
+                if args.save_vis:
+                    if is_temporal:
+                        # Video/Stream: Save to a single video file
+                        if video_writer is None:
+                            h, w = vis_img.shape[:2]
+                            video_name = f"result_{timestamp}.mp4"
+                            video_path = os.path.join(vis_dir, video_name)
+                            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                            video_writer = cv2.VideoWriter(video_path, fourcc, source.fps, (w, h))
+                            LOGGER.info(f"Initialized VideoWriter: {video_path}")
+                        
+                        video_writer.write(vis_img)
+                    else:
+                        # Images: Save individual files
+                        vis_path = os.path.join(vis_dir, filename)
+                        cv2.imwrite(vis_path, vis_img)
+                
+            t3 = timer.tick()
+            post_time_per_img = (t3 - t2) / len(imgs) if imgs else 0
+            
+            # Record timing per image (approximate)
+            for _ in range(len(imgs)):
+                timer.record(0, infer_time_per_img, post_time_per_img)
+
+    except KeyboardInterrupt:
+        LOGGER.info("Interrupted by user.")
+    finally:
+        if video_writer:
+            video_writer.release()
+            LOGGER.info("VideoWriter released.")
+        source.close()
+        cv2.destroyAllWindows()
+        
+    # 5. Performance Reporting
+    stats = timer.get_stats()
+    if stats:
+        report = f"\n" + "="*50 + "\n"
+        report += f"INFERENCE PERFORMANCE REPORT\n"
+        report += "="*50 + "\n"
+        report += f"Backend:      {args.backend.upper()}\n"
+        report += f"Device:       {args.device}\n"
+        report += f"Total Frames: {len(timer.total_times)}\n"
+        report += "-"*50 + "\n"
+        report += f"Avg FPS:      {stats['avg_fps']:.2f}\n"
+        report += f"Avg Latency:  {stats['avg_total']:.2f} ms\n"
+        report += f"  - Pre-proc: {stats['avg_pre']:.2f} ms (included in infer)\n"
+        report += f"  - Infer:    {stats['avg_infer']:.2f} ms\n"
+        report += f"  - Post-proc: {stats['avg_post']:.2f} ms\n"
+        report += f"P99 Latency:  {stats['p99_latency']:.2f} ms\n"
+        report += "="*50 + "\n"
+        LOGGER.info(report)
+        
+        # Save stats to JSON
+        import json
+        with open(os.path.join(run_dir, 'performance.json'), 'w') as f:
+            json.dump(stats, f, indent=4)
 
 if __name__ == "__main__":
     main()

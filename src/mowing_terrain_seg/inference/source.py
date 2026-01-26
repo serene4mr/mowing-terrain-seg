@@ -1,6 +1,7 @@
 import os
 import cv2
-from typing import Union, Optional, List, Dict, Any
+import numpy as np
+from typing import Union, Optional, List, Dict, Any, Tuple
 from enum import Enum
 
 class SourceType(Enum):
@@ -150,12 +151,79 @@ class InferenceSource:
         self.current_idx = 0
         return self
 
-    def __next__(self):
-        # Logic to return the next batch of (images, metadata)
-        # 1. If Image/Dir: Read file(s) from disk
-        # 2. If Video/Stream: Grab frame(s) from self.cap
-        # 3. If end of source: Raise StopIteration
-        pass
+    def __next__(self) -> Tuple[List[np.ndarray], List[Dict[str, Any]]]:
+        """
+        Get the next batch of images and metadata.
+        
+        Returns:
+            Tuple: (List of image numpy arrays, List of metadata dictionaries)
+        """
+        batch_imgs = []
+        batch_metas = []
+        
+        for _ in range(self.batch_size):
+            # 1. Check for termination (finite sources)
+            if self.total_count != -1 and self.current_idx >= self.total_count:
+                break
+
+            img = None
+            meta = {}
+            
+            # 2. Read from Disk (Images)
+            if self.type in [SourceType.IMAGE_FILE, SourceType.IMAGE_DIR]:
+                if self.current_idx < len(self.file_list):
+                    img_path = self.file_list[self.current_idx]
+                    img = cv2.imread(img_path)
+                    if img is None:
+                        # Skip corrupted images
+                        self.current_idx += 1
+                        continue
+                        
+                    meta = {
+                        'path': img_path,
+                        'name': os.path.basename(img_path),
+                        'index': self.current_idx,
+                        'source_type': self.type.value
+                    }
+                else:
+                    break
+
+            # 3. Read from Capture (Video/Stream/Camera)
+            elif self.type in [SourceType.VIDEO_FILE, SourceType.VIDEO_DIR, SourceType.CAMERA_ID, SourceType.STREAM_URL]:
+                if self.cap is not None:
+                    ret, frame = self.cap.read()
+                    if not ret:
+                        break
+                    img = frame
+                    
+                    # For video, we generate a name based on the index
+                    name = f"frame_{self.current_idx:06d}.jpg"
+                    if self.type == SourceType.VIDEO_FILE:
+                        # Try to get the original video name
+                        video_name = os.path.basename(str(self.src)).split('.')[0]
+                        name = f"{video_name}_{name}"
+
+                    meta = {
+                        'name': name,
+                        'index': self.current_idx,
+                        'timestamp_ms': self.cap.get(cv2.CAP_PROP_POS_MSEC),
+                        'source_type': self.type.value
+                    }
+                else:
+                    break
+            
+            if img is not None:
+                batch_imgs.append(img)
+                batch_metas.append(meta)
+                self.current_idx += 1
+            else:
+                break
+        
+        # 4. If we couldn't collect ANY images, the source is exhausted
+        if not batch_imgs:
+            raise StopIteration
+            
+        return batch_imgs, batch_metas
 
 
         
