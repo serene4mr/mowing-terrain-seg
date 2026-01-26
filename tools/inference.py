@@ -13,8 +13,7 @@ from tqdm import tqdm
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.mowing_terrain_seg.inference.predictor import SegPredictor, Backend
-from src.mowing_terrain_seg.inference.source import InferenceSource, SourceType
+from src.mowing_terrain_seg.inference import SegPredictor, Backend, InferenceSource, SourceType, InferenceTimer
 from src.mowing_terrain_seg.utils.logger import LOGGER
 
 
@@ -48,55 +47,11 @@ def parse_args():
     vis_group = parser.add_argument_group('Visualization & Export')
     vis_group.add_argument('--show', action='store_true', help='Show results in a window')
     vis_group.add_argument('--opacity', type=float, default=0.7, help='Overlay opacity (0-1)')
-    vis_group.add_argument('--save-vis', action='store_true', default=True, help='Save visualized results')
-    vis_group.add_argument('--no-save-vis', action='store_false', dest='save_vis', help='Do not save visualized results')
+    vis_group.add_argument('--save-vis', action='store_true', help='Save visualized results')
     vis_group.add_argument('--save-mask', action='store_true', help='Save raw prediction masks as .png')
     vis_group.add_argument('--overlay-fps', action='store_true', help='Draw FPS overlay on results')
 
     return parser.parse_args()
-
-
-class InferenceTimer:
-    def __init__(self, device='cuda:0'):
-        self.device = device
-        self.is_cuda = 'cuda' in device
-        self.pre_times = []
-        self.infer_times = []
-        self.post_times = []
-        self.total_times = []
-        self.start_tick = 0
-
-    def synchronize(self):
-        if self.is_cuda:
-            torch.cuda.synchronize()
-
-    def tick(self):
-        self.synchronize()
-        return time.time()
-
-    def record(self, pre, infer, post):
-        self.pre_times.append(pre)
-        self.infer_times.append(infer)
-        self.post_times.append(post)
-        self.total_times.append(pre + infer + post)
-
-    def get_avg_fps(self):
-        if not self.total_times:
-            return 0
-        return 1.0 / (sum(self.total_times) / len(self.total_times))
-
-    def get_stats(self):
-        if not self.total_times:
-            return {}
-        n = len(self.total_times)
-        return {
-            'avg_pre': sum(self.pre_times) / n * 1000,
-            'avg_infer': sum(self.infer_times) / n * 1000,
-            'avg_post': sum(self.post_times) / n * 1000,
-            'avg_total': sum(self.total_times) / n * 1000,
-            'avg_fps': self.get_avg_fps(),
-            'p99_latency': np.percentile(self.total_times, 99) * 1000
-        }
 
 
 def main():
@@ -160,7 +115,9 @@ def main():
                 vis_img = predictor.visualize_mask(img, mask, opacity=args.opacity, palette=auto_palette)
                 
                 if args.overlay_fps:
-                    fps = timer.get_avg_fps()
+                    avg_fps = timer.get_avg_fps()
+                    # If first frame, use current inference time to estimate FPS
+                    fps = avg_fps if avg_fps > 0 else (1.0 / infer_time_per_img if infer_time_per_img > 0 else 0)
                     cv2.putText(vis_img, f"FPS: {fps:.1f}", (10, 30), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 
