@@ -57,12 +57,45 @@ python tools/train.py \
 
 ### Inference
 
+Run inference on images, videos, or live streams.
+
 ```bash
 python tools/inference.py \
-    --input path/to/image.jpg \
-    --config configs/model.py \
-    --checkpoint work_dirs/model.pth \
-    --output-dir results/
+    --input <input_path> \
+    --cfg-uri <config_path> \
+    --model-uri <model_path> \
+    [--backend {torch,onnx,tensorrt}] \
+    [--save] \
+    [--show]
+```
+
+**Options:**
+- `--input`, `-i`: Path to image, video, directory, camera ID, or stream URL.
+- `--cfg-uri`, `-c`: Path to model config (.py for torch, pipeline.json for engines).
+- `--model-uri`, `-m`: Path to model weights (.pth, .onnx, or .engine).
+- `--backend`, `-b`: Inference backend (default: `torch`).
+- `--device`: Device used for inference (default: `cuda:0`).
+- `--output-dir`, `-o`: Root directory to save results (default: `work_dirs/inference`).
+- `--save`: Master flag to enable saving results to disk.
+- `--save-vis`: Save visualized overlay results (default if `--save` is used).
+- `--save-mask`: Save raw 1-channel segmentation masks (.png).
+- `--show`: Show results in a real-time window.
+- `--overlay-fps`: Draw real-time FPS on the results.
+- `--conf-threshold`: Confidence threshold (single float or per-class list).
+- `--batch-size`: Number of frames to process in a single batch.
+- `--opacity`: Alpha opacity for visualization overlay (default: `0.7`).
+
+**Examples:**
+
+```bash
+# 1. Single image with live display
+python tools/inference.py -i demo.jpg -c configs/model.py -m model.pth --show
+
+# 2. Video file with TensorRT backend and saving results
+python tools/inference.py -i video.mp4 -c pipeline.json -m model.engine -b tensorrt --save --overlay-fps
+
+# 3. Directory processing with raw mask saving
+python tools/inference.py -i data/test_imgs/ -c configs/model.py -m model.pth --save --save-mask
 ```
 
 ### Deploy
