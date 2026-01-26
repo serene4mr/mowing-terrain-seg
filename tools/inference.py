@@ -86,12 +86,16 @@ def main():
         LOGGER.info("Saving is disabled (use --save to enable).")
     
     # 2. Initialize Predictor
+    conf_thresholds = args.conf_threshold
+    if conf_thresholds is not None and len(conf_thresholds) == 1:
+        conf_thresholds = conf_thresholds[0]
+
     predictor = SegPredictor(
         cfg_uri=args.cfg_uri,
         model_uri=args.model_uri,
         backend=Backend(args.backend),
         device=args.device,
-        conf_thresholds=args.conf_threshold
+        conf_thresholds=conf_thresholds
     )
     
     # 3. Initialize Source
