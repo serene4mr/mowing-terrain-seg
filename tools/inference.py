@@ -130,6 +130,9 @@ def main():
     source = InferenceSource(src=args.input, batch_size=args.batch_size)
     timer = InferenceTimer(device=args.device)
     
+    # Generate auto-palette for visualization
+    auto_palette = predictor.get_auto_palette()
+    
     LOGGER.info(f"Source type: {source.type.value}, Batch size: {args.batch_size}")
     
     # Placeholder for video writer
@@ -154,12 +157,12 @@ def main():
             # B. Visualization and Saving
             t2 = timer.tick()
             for i, (img, mask, meta) in enumerate(zip(imgs, masks, metas)):
-                vis_img = predictor.visualize_mask(img, mask, opacity=args.opacity)
+                vis_img = predictor.visualize_mask(img, mask, opacity=args.opacity, palette=auto_palette)
                 
                 if args.overlay_fps:
                     fps = timer.get_avg_fps()
                     cv2.putText(vis_img, f"FPS: {fps:.1f}", (10, 30), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 
                 if args.show:
                     cv2.imshow('Mowing Terrain Segmentation', vis_img)

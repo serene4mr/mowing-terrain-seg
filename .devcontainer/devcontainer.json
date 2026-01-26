@@ -23,7 +23,7 @@
     "-v", "/dev:/dev"
   ],
 
-  "postCreateCommand": "bash -c 'apt-get update && apt-get install -y git libgl1 libglib2.0-0 sudo && if ! id -u serene > /dev/null 2>&1; then useradd -m -s /bin/bash serene && echo \"serene ALL=(ALL) NOPASSWD:ALL\" >> /etc/sudoers; fi && pip install -r requirements.txt'",
+  "postCreateCommand": "pip install -r requirements.txt",
 
   "customizations": {
     "vscode": {

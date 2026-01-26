@@ -408,6 +408,32 @@ class SegPredictor(BasePredictor):
         """
         return self._extract_masks(raw_outputs)
     
+    def get_auto_palette(self) -> List[List[int]]:
+        """Generates a high-contrast palette based on self.num_classes using HSV color wheel.
+        
+        Returns:
+            List[List[int]]: A list of RGB color lists [[R, G, B], ...]
+        """
+        import cv2
+        
+        if self.num_classes is None or self.num_classes <= 0:
+            return []
+            
+        # Generate colors in HSV space for maximum distinctness
+        # Start at Hue 30 (Yellow/Orange) to avoid Red (0), and use high Value to avoid Black
+        hsv_colors = np.zeros((self.num_classes, 1, 3), dtype=np.uint8)
+        hsv_colors[:, 0, 0] = np.linspace(30, 179, self.num_classes, endpoint=False)
+        hsv_colors[:, 0, 1] = 200 
+        hsv_colors[:, 0, 2] = 255
+        
+        # Convert to BGR (OpenCV standard)
+        bgr_palette = cv2.cvtColor(hsv_colors, cv2.COLOR_HSV2BGR).reshape(-1, 3)
+        
+        # Convert BGR to RGB for consistency with visualize_mask expectations
+        rgb_palette = bgr_palette[:, [2, 1, 0]].tolist()
+        
+        return rgb_palette
+    
     def visualize_mask(
         self, 
         img: np.ndarray, 
