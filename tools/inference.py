@@ -47,9 +47,11 @@ def parse_args():
     vis_group = parser.add_argument_group('Visualization & Export')
     vis_group.add_argument('--show', action='store_true', help='Show results in a window')
     vis_group.add_argument('--opacity', type=float, default=0.7, help='Overlay opacity (0-1)')
+    vis_group.add_argument('--overlay-fps', action='store_true', help='Draw FPS overlay on results')
+    vis_group.add_argument('--save', action='store_true', help='Save results')
     vis_group.add_argument('--save-vis', action='store_true', help='Save visualized results')
     vis_group.add_argument('--save-mask', action='store_true', help='Save raw prediction masks as .png')
-    vis_group.add_argument('--overlay-fps', action='store_true', help='Draw FPS overlay on results')
+    
 
     return parser.parse_args()
 
@@ -57,20 +59,31 @@ def parse_args():
 def main():
     args = parse_args()
     
-    # 1. Initialize Run Directory
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(args.output_dir, timestamp)
-    os.makedirs(run_dir, exist_ok=True)
-    
-    vis_dir = os.path.join(run_dir, 'vis')
-    mask_dir = os.path.join(run_dir, 'masks')
-    
-    if args.save_vis:
-        os.makedirs(vis_dir, exist_ok=True)
-    if args.save_mask:
-        os.makedirs(mask_dir, exist_ok=True)
+    # 1. Initialize Run Directory (only if saving is enabled)
+    run_dir = None
+    if args.save:
+        # If --save is provided but no specific type, default to save_vis
+        if not args.save_vis and not args.save_mask:
+            args.save_vis = True
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = os.path.join(args.output_dir, timestamp)
+        os.makedirs(run_dir, exist_ok=True)
         
-    LOGGER.info(f"Initialized inference run: {run_dir}")
+        vis_dir = os.path.join(run_dir, 'vis')
+        mask_dir = os.path.join(run_dir, 'masks')
+        
+        if args.save_vis:
+            os.makedirs(vis_dir, exist_ok=True)
+        if args.save_mask:
+            os.makedirs(mask_dir, exist_ok=True)
+            
+        LOGGER.info(f"Initialized inference run: {run_dir}")
+    else:
+        # Ensure specific save flags are False if master --save is False
+        args.save_vis = False
+        args.save_mask = False
+        LOGGER.info("Saving is disabled (use --save to enable).")
     
     # 2. Initialize Predictor
     predictor = SegPredictor(
@@ -190,10 +203,11 @@ def main():
         report += "="*50 + "\n"
         LOGGER.info(report)
         
-        # Save stats to JSON
-        import json
-        with open(os.path.join(run_dir, 'performance.json'), 'w') as f:
-            json.dump(stats, f, indent=4)
+        # Save stats to JSON (only if saving is enabled)
+        if run_dir:
+            import json
+            with open(os.path.join(run_dir, 'performance.json'), 'w') as f:
+                json.dump(stats, f, indent=4)
 
 if __name__ == "__main__":
     main()
