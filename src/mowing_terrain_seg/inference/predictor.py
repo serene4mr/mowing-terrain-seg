@@ -10,8 +10,13 @@ from PIL import ImageColor
 import mmseg
 from mmengine.dataset import Compose
 from mmengine.registry import MODELS
+from mmseg.utils import register_all_modules
+
+import onnxruntime as ort
 
 from src.mowing_terrain_seg.utils.logger import LOGGER
+
+register_all_modules()
 
 class Backend(str, Enum):
     TORCH = "torch"
@@ -90,10 +95,96 @@ class BasePredictor:
             self.data_preprocessor.to(self.device)
             
         if self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
-            # TODO: implement later
-            raise NotImplementedError
-        
-    
+            import json
+            
+            self.cfg = json.load(open(self.cfg_uri))
+            self.num_classes = self.cfg['pipeline']['tasks'][2]['params']['num_classes']
+            cfg_transforms = self.cfg['pipeline']['tasks'][0]['transforms']
+            
+            data_preprocessor_cfg = {}
+            self.data_preprocessor = MODELS.build(
+                dict(
+                    {
+                        'bgr_to_rgb': cfg_transforms[2]['to_rgb'],
+                        'mean': cfg_transforms[2]['mean'],
+                        'std': cfg_transforms[2]['std'],
+                        'size': cfg_transforms[1]['size'],
+                        'test_cfg': {'size_divisor': 32},
+                        'seg_pad_val': 255,
+                        'pad_val': 0,
+                        'type': 'SegDataPreProcessor'
+                    }
+                )
+            )
+            self.data_preprocessor.to(self.device)
+            
+            if self.backend == Backend.ONNX:
+                # Determine providers based on device setting
+                if self.device and self.device.startswith('cuda'):
+                    # Try CUDA first, ONNX Runtime will automatically fallback to CPU if needed
+                    providers = ['CUDAExecutionProvider']
+                else:
+                    # Use CPU only
+                    providers = ['CPUExecutionProvider']
+                
+                # Try to register custom ops if available (mmcv/mmdeploy)
+                sess_options = None
+                # Try mmcv first (common case)
+                try:
+                    from mmcv.ops import get_onnxruntime_op_path
+                    import os
+                    custom_op_path = get_onnxruntime_op_path()
+                    if custom_op_path and os.path.exists(custom_op_path):
+                        sess_options = ort.SessionOptions()
+                        sess_options.register_custom_ops_library(custom_op_path)
+                        LOGGER.info(f"Registered mmcv custom ops from: {custom_op_path}")
+                except (ImportError, AttributeError, FileNotFoundError):
+                    # Try mmdeploy alternative path
+                    try:
+                        import mmdeploy
+                        import os.path as osp
+                        # Common paths for mmdeploy custom ops
+                        possible_paths = [
+                            osp.join(osp.dirname(mmdeploy.__file__), 'lib', 'libmmdeploy_onnxruntime_ops.so'),
+                            osp.join(osp.dirname(mmdeploy.__file__), 'lib', 'mmdeploy_onnxruntime_ops.so'),
+                        ]
+                        for custom_op_path in possible_paths:
+                            if osp.exists(custom_op_path):
+                                sess_options = ort.SessionOptions()
+                                sess_options.register_custom_ops_library(custom_op_path)
+                                LOGGER.info(f"Registered mmdeploy custom ops from: {custom_op_path}")
+                                break
+                    except (ImportError, FileNotFoundError):
+                        pass  # Custom ops not available, will try standard loading
+                
+                try:
+                    if sess_options is not None:
+                        # Use custom ops if registered
+                        self.ort_session = ort.InferenceSession(
+                            self.model_uri, sess_options=sess_options, providers=providers)
+                    else:
+                        # Standard loading without custom ops
+                        self.ort_session = ort.InferenceSession(
+                            self.model_uri, providers=providers)
+                except Exception as e:
+                    error_msg = str(e)
+                    # Check if error is due to custom operators (mmdeploy)
+                    if 'grid_sampler' in error_msg or 'not a registered function/op' in error_msg:
+                        raise RuntimeError(
+                            f"Failed to load ONNX model: The model uses custom operators "
+                            f"(e.g., mmdeploy's grid_sampler) that are not registered in standard ONNX Runtime. "
+                            f"Original error: {error_msg}"
+                        ) from e
+                    else:
+                        # Other errors (file not found, invalid model, etc.)
+                        raise RuntimeError(
+                            f"Failed to load ONNX model: {error_msg}"
+                        ) from e
+                
+            elif self.backend == Backend.TENSORRT:
+                #TODO: implement later
+                raise NotImplementedError
+            
     def _prepare_data(
         self, 
         imgs: Union[np.ndarray, Sequence[np.ndarray]]
@@ -125,13 +216,15 @@ class BasePredictor:
             test_pipeline = [t for t in test_pipeline if t.get('type') != 'LoadAnnotations']
         
         if self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
-            # test_pipeline = [
-            #     {'type': 'LoadImageFromNDArray'},
-            #     {'keep_ratio': True, 'scale': (1024, 544), 'type': 'Resize'},
-            #     {'type': 'PackSegInputs'}
-            # ]
-            # TODO: implement later
-            raise NotImplementedError
+            test_pipeline = [
+                {'type': 'LoadImageFromNDArray'},
+                {
+                    'keep_ratio': self.cfg['pipeline']['tasks'][0]['transforms'][1]['keep_ratio'], 
+                    'scale': self.cfg['pipeline']['tasks'][0]['transforms'][1]['size'],
+                    'type': 'Resize'
+                },
+                {'type': 'PackSegInputs'}
+            ]
 
         test_pipeline[0]['type'] = 'LoadImageFromNDArray'
 
@@ -185,7 +278,20 @@ class BasePredictor:
         if self.backend == Backend.TORCH:
             out_data = self.model._run_forward(data, mode='predict')
             return out_data
-        elif self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
+        elif self.backend == Backend.ONNX:
+            # Get input name from ONNX session
+            input_name = self.ort_session.get_inputs()[0].name
+            # Convert tensor to numpy
+            input_tensor = data['inputs']
+            if isinstance(input_tensor, torch.Tensor):
+                input_numpy = input_tensor.cpu().numpy()
+            else:
+                input_numpy = input_tensor
+            # Create dict with input name as key
+            ort_inputs = {input_name: input_numpy}
+            ort_outputs = self.ort_session.run(None, ort_inputs)
+            return ort_outputs
+        elif self.backend == Backend.TENSORRT:
             # TODO: implement later
             raise NotImplementedError(f"Backend {self.backend} not yet implemented")
         else:
@@ -286,14 +392,40 @@ class SegPredictor(BasePredictor):
             return mask
     
     def _extract_single_mask(self, raw_output):
-        """Extract a single mask from a MMSegmentation output.
+        """Extract a single mask from a MMSegmentation output or ONNX output.
         
         Args:
-            raw_output: Single MMSegmentation data sample with pred_sem_seg attribute
+            raw_output: Single MMSegmentation data sample with pred_sem_seg attribute,
+                or numpy array from ONNX inference
             
         Returns:
             np.ndarray: Segmentation mask as numpy array of shape (H, W)
         """
+        # Handle ONNX outputs (numpy arrays)
+        if isinstance(raw_output, np.ndarray):
+            output = raw_output
+            # Handle different output shapes
+            if len(output.shape) == 4:
+                # Shape: [batch, num_classes, H, W] or [batch, H, W]
+                output = output[0]  # Remove batch dimension
+            
+            # After removing batch dimension, check remaining shape
+            if len(output.shape) == 3:
+                # Could be [1, H, W] (predictions with batch) or [num_classes, H, W] (logits)
+                if output.shape[0] == 1:
+                    # Shape: [1, H, W] - predictions with batch dimension, remove it
+                    mask = output[0].astype(np.uint8)
+                else:
+                    # Shape: [num_classes, H, W] - logits, need argmax
+                    mask = np.argmax(output, axis=0).astype(np.uint8)
+            elif len(output.shape) == 2:
+                # Shape: [H, W] - already predictions
+                mask = output.astype(np.uint8)
+            else:
+                raise ValueError(f"Unexpected ONNX output shape: {output.shape}")
+            return mask
+        
+        # Handle MMSegmentation data samples
         if hasattr(raw_output, 'pred_sem_seg') and raw_output.pred_sem_seg is not None:
             mask = raw_output.pred_sem_seg.data.cpu().numpy()
             # Remove batch dimension if present (shape: [1, H, W] -> [H, W])
@@ -314,12 +446,41 @@ class SegPredictor(BasePredictor):
         """Compute confidence scores from logits.
         
         Args:
-            raw_output: MMSegmentation data sample with seg_logits attribute
+            raw_output: MMSegmentation data sample with seg_logits attribute,
+                or numpy array from ONNX inference
             
         Returns:
             np.ndarray or None: Confidence scores array of shape (H, W) with max probability 
                 per pixel, or None if logits are not available
         """
+        # Handle ONNX outputs (numpy arrays)
+        if isinstance(raw_output, np.ndarray):
+            output = raw_output
+            # Handle different output shapes
+            if len(output.shape) == 4:
+                # Shape: [batch, num_classes, H, W]
+                output = output[0]  # Remove batch dimension
+            
+            # After removing batch dimension, check remaining shape
+            if len(output.shape) == 3:
+                # Could be [1, H, W] (predictions) or [num_classes, H, W] (logits)
+                if output.shape[0] == 1:
+                    # Shape: [1, H, W] - predictions, can't compute confidence
+                    return None
+                else:
+                    # Shape: [num_classes, H, W] - logits
+                    # Convert to float32 for softmax computation
+                    output_float = output.astype(np.float32)
+                    # Convert to probabilities using softmax
+                    logits_tensor = torch.from_numpy(output_float)
+                    probs = F.softmax(logits_tensor, dim=0).numpy()
+                    confidence_scores = np.max(probs, axis=0)
+                    return confidence_scores
+            else:
+                # Shape: [H, W] - already predictions, can't compute confidence
+                return None
+        
+        # Handle MMSegmentation data samples
         if not hasattr(raw_output, 'seg_logits') or raw_output.seg_logits is None:
             return None
         
@@ -351,10 +512,27 @@ class SegPredictor(BasePredictor):
         # Get confidence scores
         confidence_scores = self._compute_confidence_scores(raw_output)
         if confidence_scores is None:
-            LOGGER.warning(
-                "Confidence thresholds provided but no seg_logits found in model output. "
-                "Thresholding will be skipped."
-            )
+            # Check if this is an ONNX output that's already predictions
+            if isinstance(raw_output, np.ndarray):
+                output_shape = raw_output.shape
+                if len(output_shape) >= 2 and (len(output_shape) == 2 or 
+                    (len(output_shape) == 3 and output_shape[0] == 1) or
+                    (len(output_shape) == 4 and output_shape[1] == 1)):
+                    LOGGER.warning(
+                        f"Confidence thresholds provided but ONNX model outputs predictions "
+                        f"(shape: {output_shape}), not logits. Thresholding requires logits. "
+                        f"Please export ONNX model with logits output (before ArgMax) to enable thresholding."
+                    )
+                else:
+                    LOGGER.warning(
+                        f"Confidence thresholds provided but could not extract logits from output "
+                        f"(shape: {output_shape}). Thresholding will be skipped."
+                    )
+            else:
+                LOGGER.warning(
+                    "Confidence thresholds provided but no seg_logits found in model output. "
+                    "Thresholding will be skipped."
+                )
             return mask
         
         # Ensure mask dtype can handle 255 (uint8 or larger)
