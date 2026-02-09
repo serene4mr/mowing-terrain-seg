@@ -30,19 +30,42 @@ class InferenceTimer:
         self.total_times.append(pre + infer + post)
 
     def get_avg_fps(self):
+        """Cumulative average FPS over all recorded frames."""
         if not self.total_times:
             return 0
         return 1.0 / (sum(self.total_times) / len(self.total_times))
 
-    def get_stats(self):
+    def get_sliding_fps(self, window=30):
+        """FPS over the last `window` frames. Use for live overlay (stable, no drift)."""
+        if not self.total_times:
+            return 0
+        recent = self.total_times[-window:]
+        avg_latency = sum(recent) / len(recent)
+        return 1.0 / avg_latency if avg_latency > 0 else 0
+
+    def get_stats(self, warmup_frames=30):
+        """
+        Stats over frames after warm-up. If total frames <= warmup_frames, uses all frames.
+        Use for final report (steady-state, comparable across runs).
+        """
         if not self.total_times:
             return {}
         n = len(self.total_times)
+        skip = min(warmup_frames, n - 1) if n > 1 else 0
+        pre = self.pre_times[skip:]
+        infer = self.infer_times[skip:]
+        post = self.post_times[skip:]
+        total = self.total_times[skip:]
+        n_used = len(total)
+        if n_used == 0:
+            return {}
         return {
-            'avg_pre': sum(self.pre_times) / n * 1000,
-            'avg_infer': sum(self.infer_times) / n * 1000,
-            'avg_post': sum(self.post_times) / n * 1000,
-            'avg_total': sum(self.total_times) / n * 1000,
-            'avg_fps': self.get_avg_fps(),
-            'p99_latency': np.percentile(self.total_times, 99) * 1000
+            'avg_pre': sum(pre) / n_used * 1000,
+            'avg_infer': sum(infer) / n_used * 1000,
+            'avg_post': sum(post) / n_used * 1000,
+            'avg_total': sum(total) / n_used * 1000,
+            'avg_fps': 1.0 / (sum(total) / n_used),
+            'p99_latency': np.percentile(total, 99) * 1000,
+            'warmup_frames': skip,
+            'frames_used': n_used,
         }

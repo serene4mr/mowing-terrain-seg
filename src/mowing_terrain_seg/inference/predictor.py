@@ -216,11 +216,15 @@ class BasePredictor:
             test_pipeline = [t for t in test_pipeline if t.get('type') != 'LoadAnnotations']
         
         if self.backend == Backend.ONNX or self.backend == Backend.TENSORRT:
+            resize_cfg = self.cfg['pipeline']['tasks'][0]['transforms'][1]
+            scale = resize_cfg['size']
+            if isinstance(scale, (list, tuple)):
+                scale = tuple(scale)
             test_pipeline = [
                 {'type': 'LoadImageFromNDArray'},
                 {
-                    'keep_ratio': self.cfg['pipeline']['tasks'][0]['transforms'][1]['keep_ratio'], 
-                    'scale': self.cfg['pipeline']['tasks'][0]['transforms'][1]['size'],
+                    'keep_ratio': resize_cfg['keep_ratio'],
+                    'scale': scale,
                     'type': 'Resize'
                 },
                 {'type': 'PackSegInputs'}

@@ -106,3 +106,9 @@ mlruns/
 
 assets/
 inference_out/
+
+
+mmdeploy_model/
+onedl-mmdetection/
+onedl-mmdeploy/
+checkpoints

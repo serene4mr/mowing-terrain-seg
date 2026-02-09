@@ -33,3 +33,13 @@ python tools/inference.py \
     --conf-threshold 0.0,0.0,0.0 \
     --opacity 0.5 \
     --overlay-fps
+
+
+
+
+python onedl-mmdeploy/tools/deploy.py   onedl-mmdeploy/configs/mmdet/detection/detection_onnxruntime_dynamic.py   onedl-mmdetection/configs/faster_rcnn/faster-rcnn_r50_fpn_1x_coco.py   checkpoints/faster_rcnn_r50_fpn_1x_coco_20200130-047c8118.pth   onedl-mmdetection/demo/demo.jpg   --work-dir mmdeploy_model/faster-rcnn-onnx   --device cuda   --dump-info
+
+
+
+
+pip install "mmcv==2.2.0" -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.4/index.html

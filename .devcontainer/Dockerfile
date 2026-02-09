@@ -1,4 +1,5 @@
-FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+# FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn9-devel
 
 ARG USERNAME
 ARG USER_UID=1000

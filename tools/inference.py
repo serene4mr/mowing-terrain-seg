@@ -132,9 +132,10 @@ def main():
                 vis_img = predictor.visualize_mask(img, mask, opacity=args.opacity, palette=auto_palette)
                 
                 if args.overlay_fps:
-                    avg_fps = timer.get_avg_fps()
-                    # If first frame, use current inference time to estimate FPS
-                    fps = avg_fps if avg_fps > 0 else (1.0 / infer_time_per_img if infer_time_per_img > 0 else 0)
+                    # Sliding-window FPS (last 30 frames) so overlay stabilizes and doesn't drift
+                    fps = timer.get_sliding_fps(window=30)
+                    if fps <= 0 and infer_time_per_img > 0:
+                        fps = 1.0 / infer_time_per_img
                     cv2.putText(vis_img, f"FPS: {fps:.1f}", (10, 30), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 
@@ -188,8 +189,8 @@ def main():
         source.close()
         cv2.destroyAllWindows()
         
-    # 5. Performance Reporting
-    stats = timer.get_stats()
+    # 5. Performance Reporting (stats after warm-up for steady-state, comparable numbers)
+    stats = timer.get_stats(warmup_frames=30)
     if stats:
         report = f"\n" + "="*50 + "\n"
         report += f"INFERENCE PERFORMANCE REPORT\n"
@@ -197,6 +198,8 @@ def main():
         report += f"Backend:      {args.backend.upper()}\n"
         report += f"Device:       {args.device}\n"
         report += f"Total Frames: {len(timer.total_times)}\n"
+        if stats.get('warmup_frames', 0) > 0:
+            report += f"Frames Used:  {stats['frames_used']} (after {stats['warmup_frames']} warm-up)\n"
         report += "-"*50 + "\n"
         report += f"Avg FPS:      {stats['avg_fps']:.2f}\n"
         report += f"Avg Latency:  {stats['avg_total']:.2f} ms\n"

@@ -1,17 +1,17 @@
 # Core ML/DL frameworks
-torch>=1.13.0
-torchvision>=0.14.0
+# torch>=1.13.0
+# torchvision>=0.14.0
 
 # MMSegmentation ecosystem
-mmcv>=2.0.0,<2.2.0
-mmsegmentation>=1.0.0
-mmdeploy
-mmengine>=0.7.0
+# onedl-mim
+# onedl-mmcv
+# onedl-mmengine
+# onedl-mmsegmentation
+# onedl-mmdetection
+# mmdeploy
 ftfy>=6.0.0
 regex>=2022.0.0
 
-# MMDetection
-mmdet
 
 # Data processing
 numpy>=1.21.0
@@ -33,4 +33,5 @@ protobuf<=3.20.2
 mlflow>=2.0.0
 
 ipykernel
-onnxruntime-gpu
+onnxruntime==1.19.2
+onnxruntime-gpu==1.19.2
