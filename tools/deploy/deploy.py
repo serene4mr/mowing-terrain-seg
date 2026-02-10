@@ -1,38 +1,45 @@
-# Copyright (c) OpenMMLab. All rights reserved.
+"""
+Deploy: export PyTorch model to ONNX (and other backends), then optionally
+rewrite mmdeploy/mmcv custom ops to standard ONNX in place.
+
+- Export: model config + checkpoint → ONNX (e.g. end2end.onnx) via mmdeploy.
+- Rewrite (ONNX Runtime only): load ONNX, replace custom ops (e.g. grid_sampler
+  → GridSample) in memory, save back to the same file. No temp file; one read,
+  one write. Use --no-rewrite to skip and keep custom ops.
+
+Usage:
+  python tools/deploy/deploy.py <deploy_cfg> <model_cfg> <checkpoint> <image> [options]
+
+Examples:
+  # Export to ONNX and rewrite custom ops → work_dir/end2end.onnx
+  python tools/deploy/deploy.py \\
+    configs/deploy/custom/segmentation_onnxruntime_dynamic.py \\
+    work_dirs/my_exp/config.py \\
+    work_dirs/my_exp/best.pth \\
+    assets/image/sample.jpg \\
+    --work-dir mmdeploy_model/onnx \\
+    --device cuda \\
+    --dump-info
+
+  # Export only, no rewrite (keep custom ops; need mmdeploy runtime)
+  python tools/deploy/deploy.py ... --no-rewrite
+
+  # Show visualization
+  python tools/deploy/deploy.py ... --show
+"""
+
 import argparse
 import logging
 import os
 import os.path as osp
-import sys
+from collections import defaultdict
 from functools import partial
 
-# Add project root to path to import custom modules
-_project_root = osp.dirname(osp.dirname(osp.dirname(osp.abspath(__file__))))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
-# Import custom modules to register visualizers, datasets, etc.
-try:
-    import src  # This registers CustomSegLocalVisualizer and other custom modules
-except ImportError:
-    pass  # If src is not available, continue without it
-
 import mmengine
-import torch
+import onnx
 import torch.multiprocessing as mp
+from onnx import helper
 from torch.multiprocessing import Process, set_start_method
-
-
-
-# Fix for PyTorch 2.6 weights_only loading issue
-# Patch torch.load to use weights_only=False for compatibility with older checkpoints
-_original_torch_load = torch.load
-def _patched_torch_load(*args, **kwargs):
-    """Patched torch.load that defaults to weights_only=False for compatibility."""
-    if 'weights_only' not in kwargs:
-        kwargs['weights_only'] = False
-    return _original_torch_load(*args, **kwargs)
-torch.load = _patched_torch_load
 
 from mmdeploy.apis import (create_calib_input_data, extract_model,
                            get_predefined_partition_cfg, torch2onnx,
@@ -44,9 +51,164 @@ from mmdeploy.utils import (IR, Backend, get_backend, get_calib_filename,
                             get_ir_config, get_partition_config,
                             get_root_logger, load_config, target_wrapper)
 
+# ----- Inlined rewrite logic (no import from rewrite_custom_ops_onnx) -----
+_CUSTOM_DOMAINS = ("mmdeploy", "mmcv")
+_STANDARD_OPSET_REQUIRED = {"GridSample": 13, "RoiAlign": 16}
+_MODE_MAP = {0: "bilinear", 1: "nearest", 2: "bicubic"}
+_PADDING_MAP = {0: "zeros", 1: "border", 2: "reflection"}
 
+
+def _get_attr(node, name, default=0):
+    for a in node.attribute:
+        if a.name == name:
+            return a.i
+    return default
+
+
+def _get_attr_f(node, name, default=0.0):
+    for a in node.attribute:
+        if a.name == name:
+            return a.f
+    return default
+
+
+def _get_attr_s(node, name, default=""):
+    for a in node.attribute:
+        if a.name == name:
+            if a.s:
+                return a.s.decode("utf-8") if isinstance(a.s, bytes) else a.s
+            return default
+    return default
+
+
+def _rewrite_mmdeploy_grid_sampler(node):
+    interp = _get_attr(node, "interpolation_mode_i", 0)
+    padding = _get_attr(node, "padding_mode_i", 0)
+    align = _get_attr(node, "align_corners_i", 0)
+    mode_s = _MODE_MAP.get(interp, "bilinear")
+    padding_s = _PADDING_MAP.get(padding, "zeros")
+    align_corners = 1 if align else 0
+    new_node = helper.make_node(
+        "GridSample",
+        inputs=list(node.input),
+        outputs=list(node.output),
+        name=node.name + "_GridSample" if node.name else None,
+        mode=mode_s,
+        padding_mode=padding_s,
+        align_corners=align_corners,
+    )
+    return [new_node]
+
+
+def _rewrite_mmcv_roi_align(node):
+    out_h = _get_attr(node, "output_height_i", _get_attr(node, "aligned_height", 1))
+    out_w = _get_attr(node, "output_width_i", _get_attr(node, "aligned_weight", 1))
+    spatial_scale = _get_attr_f(node, "spatial_scale_f", _get_attr_f(node, "spatial_scale", 1.0))
+    sampling_ratio = _get_attr(node, "sampling_ratio_i", _get_attr(node, "sampling_ratio", 0))
+    mode = _get_attr_s(node, "pool_mode") or _get_attr_s(node, "mode_s") or "avg"
+    if mode not in ("avg", "max"):
+        mode = "avg"
+    aligned = _get_attr(node, "aligned", 0)
+    coord_mode = "half_pixel" if aligned else "output_half_pixel"
+    if len(node.input) < 2:
+        return []
+    inputs = list(node.input)
+    if len(inputs) == 2:
+        return []
+    new_node = helper.make_node(
+        "RoiAlign",
+        inputs=inputs,
+        outputs=list(node.output),
+        name=node.name + "_RoiAlign" if node.name else None,
+        mode=mode,
+        output_height=out_h,
+        output_width=out_w,
+        sampling_ratio=sampling_ratio,
+        spatial_scale=spatial_scale,
+        coordinate_transformation_mode=coord_mode,
+    )
+    return [new_node]
+
+
+_REPLACEMENT_REGISTRY = {
+    ("mmdeploy", "grid_sampler"): _rewrite_mmdeploy_grid_sampler,
+    ("mmcv", "MMCVRoIAlign"): _rewrite_mmcv_roi_align,
+    ("mmcv", "RoIAlign"): _rewrite_mmcv_roi_align,
+}
+
+
+def _ensure_opset(model, min_version):
+    opset_domain = ""
+    for imp in model.opset_import:
+        if imp.domain == opset_domain:
+            if imp.version < min_version:
+                imp.version = min_version
+            return
+    model.opset_import.append(helper.make_opsetid(opset_domain, min_version))
+
+
+def _rewrite_model_in_memory(model, logger=None):
+    """Apply custom-op replacements to an ONNX model in memory. Returns (model, replaced_count, kept_custom)."""
+    min_opset = max(_STANDARD_OPSET_REQUIRED.values())
+    _ensure_opset(model, min_opset)
+
+    new_nodes = []
+    replaced_count = 0
+    kept_custom = defaultdict(int)
+
+    for node in model.graph.node:
+        domain = node.domain or ""
+        op_type = node.op_type
+        key = (domain, op_type)
+
+        if domain in _CUSTOM_DOMAINS:
+            rewriter = _REPLACEMENT_REGISTRY.get(key)
+            if rewriter is not None:
+                try:
+                    replacement_nodes = rewriter(node)
+                    if replacement_nodes:
+                        new_nodes.extend(replacement_nodes)
+                        replaced_count += 1
+                    else:
+                        new_nodes.append(node)
+                        kept_custom[key] += 1
+                except Exception as e:
+                    new_nodes.append(node)
+                    kept_custom[key] += 1
+                    if logger:
+                        logger.warning(
+                            f"Replacement failed for {domain}::{op_type} ({node.name}): {e}"
+                        )
+            else:
+                new_nodes.append(node)
+                kept_custom[key] += 1
+        else:
+            new_nodes.append(node)
+
+    del model.graph.node[:]
+    model.graph.node.extend(new_nodes)
+    return model, replaced_count, kept_custom
+
+
+def rewrite_custom_ops(path_in: str, path_out: str, logger=None):
+    """Replace mmdeploy/mmcv custom ops with standard ONNX. Inlined (no import)."""
+    model = onnx.load(path_in)
+    model, replaced_count, kept_custom = _rewrite_model_in_memory(model, logger=logger)
+    onnx.save(model, path_out)
+
+    if logger:
+        logger.info(f"Rewrite: saved {path_out}, replaced {replaced_count} custom op(s).")
+        if kept_custom:
+            for (dom, op), count in sorted(kept_custom.items()):
+                logger.info(f"  Kept {dom}::{op}: {count} node(s)")
+    return replaced_count
+
+
+# ----- Deploy (same as deploy.py) -----
 def parse_args():
-    parser = argparse.ArgumentParser(description='Export model to backends.')
+    parser = argparse.ArgumentParser(
+        description='Export model to backends, then rewrite custom ops to standard ONNX.'
+    )
     parser.add_argument('deploy_cfg', help='deploy config path')
     parser.add_argument('model_cfg', help='model config path')
     parser.add_argument('checkpoint', help='model checkpoint path')
@@ -87,109 +249,34 @@ def parse_args():
         '--uri',
         default='192.168.1.1:60000',
         help='Remote ipv4:port or ipv6:port for inference on edge device.')
+    parser.add_argument(
+        '--no-rewrite',
+        action='store_true',
+        help='Skip rewriting custom ops to standard ONNX (only run deploy).')
     args = parser.parse_args()
     return args
 
 
-def _patch_torch_load_in_subprocess():
-    """Patch torch.load in subprocess to handle PyTorch 2.6 weights_only issue."""
-    import torch
-    _original_load = torch.load
-    def _patched_load(*args, **kwargs):
-        if 'weights_only' not in kwargs:
-            kwargs['weights_only'] = False
-        return _original_load(*args, **kwargs)
-    torch.load = _patched_load
-
-
-def _register_custom_modules_in_subprocess():
-    """Register custom modules (visualizers, datasets, etc.) in subprocess."""
-    import sys
-    import os.path as osp
-    # Add project root to path
-    _project_root = osp.dirname(osp.dirname(osp.dirname(osp.abspath(__file__))))
-    if _project_root not in sys.path:
-        sys.path.insert(0, _project_root)
-    
-    # Ensure mmseg is imported first to initialize registries
-    try:
-        from mmseg.registry import VISUALIZERS
-        from mmseg import registry as mmseg_registry
-        # Import mmseg modules to ensure registry is initialized
-        from mmseg.visualization import SegLocalVisualizer
-    except Exception:
-        pass
-    
-    # Import to register custom modules (this must happen after mmseg is imported)
-    try:
-        import src  # This registers CustomSegLocalVisualizer
-        # Verify registration
-        from mmseg.registry import VISUALIZERS
-        if 'CustomSegLocalVisualizer' in VISUALIZERS._module_dict:
-            pass  # Successfully registered
-    except ImportError:
-        pass
-    except Exception:
-        pass  # If registration fails, continue anyway
-
-
-class _PatchedTargetWrapper:
-    """Picklable wrapper class that patches torch.load and registers custom modules before calling target_wrapper."""
-    def __init__(self, target, log_level, ret_value):
-        self.target = target
-        self.log_level = log_level
-        self.ret_value = ret_value
-    
-    def __call__(self, *args, **kwargs):
-        _patch_torch_load_in_subprocess()
-        _register_custom_modules_in_subprocess()
-        wrap_func = partial(target_wrapper, self.target, self.log_level, self.ret_value)
-        return wrap_func(*args, **kwargs)
-
-
-def create_process(name, target, args, kwargs, ret_value=None, optional=False):
-    """Create and run a process.
-    
-    Args:
-        name: Process name for logging
-        target: Target function to run
-        args: Positional arguments
-        kwargs: Keyword arguments
-        ret_value: Return value holder (multiprocessing.Value)
-        optional: If True, don't exit on failure (just log warning)
-    """
+def create_process(name, target, args, kwargs, ret_value=None):
     logger = get_root_logger()
     logger.info(f'{name} start.')
     log_level = logger.level
 
-    # Use a picklable class-based wrapper
-    wrapped_target = _PatchedTargetWrapper(target, log_level, ret_value)
+    wrap_func = partial(target_wrapper, target, log_level, ret_value)
 
-    process = Process(target=wrapped_target, args=args, kwargs=kwargs)
+    process = Process(target=wrap_func, args=args, kwargs=kwargs)
     process.start()
     process.join()
 
     if ret_value is not None:
         if ret_value.value != 0:
-            if optional:
-                logger.warning(f'{name} failed (optional step, continuing).')
-                return False
-            else:
-                logger.error(f'{name} failed.')
-                exit(1)
+            logger.error(f'{name} failed.')
+            exit(1)
         else:
             logger.info(f'{name} success.')
-            return True
-    return True
 
 
 def torch2ir(ir_type: IR):
-    """Return the conversion function from torch to the intermediate
-    representation.
-
-    Args:
-        ir_type (IR): The type of the intermediate representation.
-    """
     if ir_type == IR.ONNX:
         return torch2onnx
     elif ir_type == IR.TORCHSCRIPT:
@@ -202,7 +289,7 @@ def main():
     args = parse_args()
     set_start_method('spawn', force=True)
     logger = get_root_logger()
-    log_level = getattr(logging, args.log_level)
+    log_level = logging.getLevelName(args.log_level)
     logger.setLevel(log_level)
 
     pipeline_funcs = [
@@ -217,10 +304,8 @@ def main():
     quant = args.quant
     quant_image_dir = args.quant_image_dir
 
-    # load deploy_cfg
     deploy_cfg, model_cfg = load_config(deploy_cfg_path, model_cfg_path)
 
-    # create work_dir if not
     mmengine.mkdir_or_exist(osp.abspath(args.work_dir))
 
     if args.dump_info:
@@ -233,7 +318,6 @@ def main():
 
     ret_value = mp.Value('d', 0, lock=False)
 
-    # convert to IR
     ir_config = get_ir_config(deploy_cfg)
     ir_save_file = ir_config['save_file']
     ir_type = IR.get(ir_config['type'])
@@ -246,10 +330,8 @@ def main():
         checkpoint_path,
         device=args.device)
 
-    # convert backend
     ir_files = [osp.join(args.work_dir, ir_save_file)]
 
-    # partition model
     partition_cfgs = get_partition_config(deploy_cfg)
 
     if partition_cfgs is not None:
@@ -279,7 +361,6 @@ def main():
 
             ir_files.append(save_path)
 
-    # calib data
     calib_filename = get_calib_filename(deploy_cfg)
     if calib_filename is not None:
         calib_path = osp.join(args.work_dir, calib_filename)
@@ -293,12 +374,9 @@ def main():
             device=args.device)
 
     backend_files = ir_files
-    # convert backend
     backend = get_backend(deploy_cfg)
 
-    # preprocess deploy_cfg
     if backend == Backend.RKNN:
-        # TODO: Add this to task_processor in the future
         import tempfile
 
         from mmdeploy.utils import (get_common_config, get_normalization,
@@ -319,14 +397,11 @@ def main():
         if quantization_cfg.get('dataset', None) is None:
             quantization_cfg['dataset'] = dataset_file
     if backend == Backend.ASCEND:
-        # TODO: Add this to backend manager in the future
         if args.dump_info:
             from mmdeploy.backend.ascend import update_sdk_pipeline
             update_sdk_pipeline(args.work_dir)
 
     if backend == Backend.VACC:
-        # TODO: Add this to task_processor in the future
-
         from onnx2vacc_quant_dataset import get_quant
 
         from mmdeploy.utils import get_model_inputs
@@ -350,20 +425,32 @@ def main():
                     kwargs=dict(),
                     ret_value=ret_value)
 
-    # convert to backend
     PIPELINE_MANAGER.set_log_level(log_level, [to_backend])
     if backend == Backend.TENSORRT:
         PIPELINE_MANAGER.enable_multiprocess(True, [to_backend])
     backend_files = to_backend(
         backend,
         ir_files,
-        work_dir=args.work_dir, 
+        work_dir=args.work_dir,
         deploy_cfg=deploy_cfg,
         log_level=log_level,
         device=args.device,
         uri=args.uri)
 
-    # ncnn quantization
+    # Rewrite custom ops in memory, then write once to the same ONNX file (no temp file)
+    if backend == Backend.ONNXRUNTIME and not args.no_rewrite:
+        for bf in backend_files:
+            if bf.endswith('.onnx') and osp.isfile(bf):
+                model = onnx.load(bf)
+                model, replaced_count, kept_custom = _rewrite_model_in_memory(model, logger=logger)
+                onnx.save(model, bf)
+                logger.info(
+                    f"Rewritten (standard ops) in place: {bf}, replaced {replaced_count} custom op(s)."
+                )
+                if kept_custom:
+                    for (dom, op), count in sorted(kept_custom.items()):
+                        logger.info(f"  Kept {dom}::{op}: {count} node(s)")
+
     if backend == Backend.NCNN and quant:
         from onnx2ncnn_quant_table import get_table
 
@@ -406,46 +493,26 @@ def main():
     if backend == Backend.SNPE:
         extra['uri'] = args.uri
 
-    # get backend inference result, try render (optional - don't fail deployment if visualization fails)
-    ret_value_vis1 = mp.Value('d', 0, lock=False)
-    backend_output_file = osp.join(args.work_dir, f'output_{backend.value}.jpg')
-    create_process(
-        f'visualize {backend.value} model',
-        target=visualize_model,
-        args=(model_cfg_path, deploy_cfg_path, backend_files, args.test_img,
-              args.device),
-        kwargs=extra,
-        ret_value=ret_value_vis1,
-        optional=True)
-    
-    # Check if visualization file was actually created
-    if osp.exists(backend_output_file):
-        logger.info(f'Backend visualization saved to: {backend_output_file}')
-    else:
-        logger.warning(f'Backend visualization file not created: {backend_output_file}')
+    if args.show:
+        create_process(
+            f'visualize {backend.value} model',
+            target=visualize_model,
+            args=(model_cfg_path, deploy_cfg_path, backend_files,
+                  args.test_img, args.device),
+            kwargs=extra,
+            ret_value=ret_value)
 
-    # get pytorch model inference result, try visualize if possible (optional)
-    ret_value_vis2 = mp.Value('d', 0, lock=False)
-    pytorch_output_file = osp.join(args.work_dir, 'output_pytorch.jpg')
-    create_process(
-        'visualize pytorch model',
-        target=visualize_model,
-        args=(model_cfg_path, deploy_cfg_path, [checkpoint_path],
-              args.test_img, args.device),
-        kwargs=dict(
-            backend=Backend.PYTORCH,
-            output_file=pytorch_output_file,
-            show_result=args.show),
-        ret_value=ret_value_vis2,
-        optional=True)
-    
-    # Check if visualization file was actually created
-    if osp.exists(pytorch_output_file):
-        logger.info(f'PyTorch visualization saved to: {pytorch_output_file}')
-    else:
-        logger.warning(f'PyTorch visualization file not created: {pytorch_output_file}')
-    
-    logger.info('Deployment process completed. Model exported successfully.')
+        create_process(
+            'visualize pytorch model',
+            target=visualize_model,
+            args=(model_cfg_path, deploy_cfg_path, [checkpoint_path],
+                  args.test_img, args.device),
+            kwargs=dict(
+                backend=Backend.PYTORCH,
+                output_file=osp.join(args.work_dir, 'output_pytorch.jpg'),
+                show_result=args.show),
+            ret_value=ret_value)
+    logger.info('All process success.')
 
 
 if __name__ == '__main__':
