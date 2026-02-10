@@ -100,43 +100,47 @@ python tools/inference.py -i data/test_imgs/ -c configs/model.py -m model.pth --
 
 ### Deploy
 
-Export model to backends.
+Export PyTorch model to ONNX (and other backends). For ONNX Runtime, the script can optionally **rewrite mmdeploy/mmcv custom ops to standard ONNX** in place (e.g. `grid_sampler` → `GridSample`), so the output runs without mmdeploy’s custom op library. Rewrite is in-memory then one write to `end2end.onnx`; use `--no-rewrite` to keep custom ops.
 
 ```bash
-python tools/deploy_tools/deploy.py \
-    <deploy_cfg> \
-    <model_cfg> \
-    <checkpoint> \
-    <img> \
-    [--test-img TEST_IMG [TEST_IMG ...]] \
-    [--work-dir WORK_DIR] \
-    [--calib-dataset-cfg CALIB_DATASET_CFG] \
-    [--device DEVICE] \
-    [--log-level {CRITICAL,FATAL,ERROR,WARN,WARNING,INFO,DEBUG,NOTSET}] \
-    [--show] \
-    [--dump-info] \
-    [--quant-image-dir QUANT_IMAGE_DIR] \
-    [--quant] \
-    [--uri URI]
+python tools/deploy/deploy.py <deploy_cfg> <model_cfg> <checkpoint> <img> [options]
 ```
 
 **Positional arguments:**
-- `deploy_cfg`: Deploy config path
-- `model_cfg`: Model config path
-- `checkpoint`: Model checkpoint path
-- `img`: Image used to convert model
+- `deploy_cfg`: Deploy config path (e.g. `configs/deploy/custom/segmentation_onnxruntime_dynamic.py`)
+- `model_cfg`: Model config path (e.g. `work_dirs/my_exp/config.py`)
+- `checkpoint`: Model checkpoint path (e.g. `work_dirs/my_exp/best.pth`)
+- `img`: Image used for conversion (e.g. `assets/image/sample.jpg`)
 
 **Options:**
-- `--test-img`: Image(s) used to test model
-- `--work-dir`: Directory to save logs and models
-- `--calib-dataset-cfg`: Dataset config path used to calibrate in int8 mode (defaults to "val" dataset in model config if not specified)
-- `--device`: Device used for conversion
-- `--log-level`: Set log level
-- `--show`: Show detection outputs
-- `--dump-info`: Output information for SDK
-- `--quant-image-dir`: Image directory for quantize model
-- `--quant`: Quantize model to low bit
-- `--uri`: Remote ipv4:port or ipv6:port for inference on edge device
+- `--work-dir`: Directory to save logs and exported model (default: current dir). Output ONNX: `end2end.onnx`.
+- `--device`: Device for conversion (default: `cpu`). Use `cuda` for GPU.
+- `--dump-info`: Output SDK metadata (pipeline.json, etc.).
+- `--no-rewrite`: Skip rewriting custom ops; keep mmdeploy custom ops (requires mmdeploy runtime at inference).
+- `--show`: Run visualization after export.
+- `--test-img`: Image(s) for testing the exported model.
+- `--log-level`: Log level (default: `INFO`).
+- `--calib-dataset-cfg`, `--quant-image-dir`, `--quant`, `--uri`: Calibration and quantization options (see script help).
+
+**Examples:**
+
+```bash
+# Export to ONNX and rewrite custom ops → work_dir/end2end.onnx (standard ONNX)
+python tools/deploy/deploy.py \
+    configs/deploy/custom/segmentation_onnxruntime_dynamic.py \
+    work_dirs/my_exp/config.py \
+    work_dirs/my_exp/best.pth \
+    assets/image/sample.jpg \
+    --work-dir mmdeploy_model/onnx \
+    --device cuda \
+    --dump-info
+
+# Export only, no rewrite (keep custom ops)
+python tools/deploy/deploy.py ... --no-rewrite
+
+# Export and show visualization
+python tools/deploy/deploy.py ... --show
+```
 
 ## Project Structure
 
