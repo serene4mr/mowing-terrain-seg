@@ -1,4 +1,5 @@
 _base_ = ['../mmseg/segmentation_dynamic.py', '../_base_/backends/onnxruntime.py']
+codebase_config = dict(type='mmseg', task='Segmentation', with_argmax=False)
 
 onnx_config = dict(
     opset_version=17,
