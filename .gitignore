@@ -1,9 +1,13 @@
-# Python
+# ─── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+*.egg-info/
+*.egg
+MANIFEST
+.installed.cfg
 build/
 develop-eggs/
 dist/
@@ -16,21 +20,11 @@ parts/
 sdist/
 var/
 wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
 
-# PyTorch
-*.pth
-*.pt
-*.pkl
-*.pickle
+# ─── Jupyter ─────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Environment
+# ─── Virtual environments ─────────────────────────────────────────────────────
 .env
 .venv
 env/
@@ -39,14 +33,14 @@ ENV/
 env.bak/
 venv.bak/
 
-# IDE
+# ─── IDE / editor ─────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# ─── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 .DS_Store?
 ._*
@@ -56,61 +50,68 @@ ehthumbs.db
 Thumbs.db
 *.db
 
-# Data and experiments
-data/
-experiments/
+# ─── Testing & coverage ───────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.hypothesis/
 
-# Temporary files
-*.tmp
-*.temp
-*.log
+# ─── Type checking ────────────────────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
-# Model checkpoints and weights
+# ─── Linter / formatter caches ────────────────────────────────────────────────
+.ruff_cache/
+
+# ─── Docs build ───────────────────────────────────────────────────────────────
+docs/_build/
+docs/build/
+
+# ─── Training outputs (local only, never committed) ───────────────────────────
+work_dirs/
+work_dirs_old/
+tmp/
+
+# ─── Deploy / inference outputs ───────────────────────────────────────────────
+mmdeploy_model/
+checkpoints/
+inference_out/
+
+# ─── Third-party repos cloned locally ─────────────────────────────────────────
+onedl-mmdetection/
+onedl-mmdeploy/
+
+# ─── ML experiment tracking ───────────────────────────────────────────────────
+mlruns/
+
+# ─── Assets (images, videos — use Git LFS or store externally) ────────────────
+assets/
+
+# ─── Model / data artefacts ───────────────────────────────────────────────────
 *.pth
 *.pt
 *.ckpt
+*.pkl
+*.pickle
 *.h5
 *.hdf5
-
-# TensorBoard event files
+*.onnx
 *.tfevents*
 
-# Large files
+# ─── Archives ─────────────────────────────────────────────────────────────────
 *.zip
 *.tar.gz
 *.rar
 *.7z
 
-# Configuration overrides
+# ─── Local config overrides ───────────────────────────────────────────────────
 config_local.py
 config_override.py
 
-# Test outputs
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Documentation
-docs/_build/
-docs/build/
-
-# MyPy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-work_dirs/
-work_dirs_old/
-mlruns/
-
-tmp/
-
-
-assets/
-inference_out/
-
-
-mmdeploy_model/
-onedl-mmdetection/
-onedl-mmdeploy/
-checkpoints
+# ─── Misc temporary files ─────────────────────────────────────────────────────
+*.tmp
+*.temp
+*.log
+data/
+experiments/
