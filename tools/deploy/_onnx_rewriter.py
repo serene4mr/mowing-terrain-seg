@@ -5,7 +5,7 @@ Used by tools/deploy/deploy.py and tools/deploy/rewrite_custom_ops_onnx.py.
 """
 
 from collections import defaultdict
-from typing import Any, Dict, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 import onnx
 from onnx import helper
@@ -88,11 +88,26 @@ def _rewrite_mmcv_roi_align(node):
     return [new_node]
 
 
-_REPLACEMENT_REGISTRY = {
+REPLACEMENT_REGISTRY: Dict[Tuple[str, str], Callable[[Any], list]] = {
     ("mmdeploy", "grid_sampler"): _rewrite_mmdeploy_grid_sampler,
     ("mmcv", "MMCVRoIAlign"): _rewrite_mmcv_roi_align,
     ("mmcv", "RoIAlign"): _rewrite_mmcv_roi_align,
 }
+
+
+def register_rewriter(
+    domain: str,
+    op_type: str,
+    rewriter: Callable[[Any], list],
+) -> None:
+    """Register a custom-op rewrite handler.
+
+    External callers can extend rewrite coverage without modifying this file:
+    ``register_rewriter("my_domain", "MyOp", my_rewriter_fn)``.
+    """
+    if not callable(rewriter):
+        raise TypeError("rewriter must be callable")
+    REPLACEMENT_REGISTRY[(domain, op_type)] = rewriter
 
 
 def _ensure_opset(model, min_version):
@@ -105,7 +120,11 @@ def _ensure_opset(model, min_version):
     model.opset_import.append(helper.make_opsetid(opset_domain, min_version))
 
 
-def rewrite_model_in_memory(model, logger=None):
+def rewrite_model_in_memory(
+    model,
+    logger=None,
+    custom_domains: Optional[Iterable[str]] = None,
+):
     """Apply custom-op replacements to an ONNX model in memory.
 
     Returns:
@@ -119,13 +138,15 @@ def rewrite_model_in_memory(model, logger=None):
     replaced_count = 0
     kept_custom: Dict[Tuple[str, str], int] = defaultdict(int)
 
+    domains = set(custom_domains) if custom_domains is not None else set(_CUSTOM_DOMAINS)
+
     for node in model.graph.node:
         domain = node.domain or ""
         op_type = node.op_type
         key = (domain, op_type)
 
-        if domain in _CUSTOM_DOMAINS:
-            rewriter = _REPLACEMENT_REGISTRY.get(key)
+        if domain in domains:
+            rewriter = REPLACEMENT_REGISTRY.get(key)
             if rewriter is not None:
                 try:
                     replacement_nodes = rewriter(node)
