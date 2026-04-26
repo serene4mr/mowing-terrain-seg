@@ -26,6 +26,9 @@ protobuf<=3.20.2
 openmim
 ftfy
 regex
+mlflow
+tensorboard
+future
 
 # Dev / CI
 pytest>=7.0
