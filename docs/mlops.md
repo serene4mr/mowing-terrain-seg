@@ -230,6 +230,14 @@ work_dirs/dlv3p_r50_ycor_v1/deploy/onnx/
 
 `detail.json` is your **automatic provenance link** between deploy artifacts and the training run.
 
+> **Matching rule:** the `.pth` you pass to `deploy.py` in Stage C and the `--pth` you pass to
+> `release.py` in Stage D **must be the same checkpoint file**. `release.py` enforces this:
+>
+> - **Hard fail** if the `.pth` mtime is newer than `end2end.onnx` — the ONNX is stale, re-run Stage C.
+> - **Warning** if `detail.json` does not reference the checkpoint name — may indicate a mismatched build.
+>
+> If you re-train and pick a new checkpoint, re-run Stage C with the new `.pth` before releasing.
+
 ### Stage D: Release (manual, deliberate)
 
 **Implemented:** [tools/release.py](tools/release.py) (opt-in: `pip install -e ".[release]"`).
