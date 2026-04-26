@@ -247,7 +247,7 @@ python tools/release.py \
 What it does:
 1. Validates the experiment dir: top-level training `*.py` config, `summary.json`, and the chosen `.pth`.
 2. Records git SHA of **this** code repo; refuses if unknown/dirty (use `--allow-dirty` to override).
-3. Optionally re-runs deploy (`--auto-deploy`) and checks **drift** between the `.pth` and `onnx/` (Section 6.1).
+3. Checks **drift** between the `.pth` and `onnx/` if `--deploy` is set (Section 6.1).
 4. Builds a staging dir matching the HF layout (Section 3): `config.py`, `summary.json`, `pytorch/best.pth`, `onnx/`, `README.md`, `metrics.json` (+ optional `samples/`).
 5. `HfApi().create_repo` (private by default) + `upload_folder` + `create_tag` on the Hub.
 6. Writes `work_dirs/<exp>/release.json` with provenance, prints `https://huggingface.co/.../tree/<tag>`.
@@ -296,7 +296,6 @@ docs/mlops.md                            ← this document
 tools/release.py                         ← promote work_dir → HF repo (CLI)
 tools/hf_release/                        ← release helpers
     ├── validate.py                      ← experiment + drift checks
-    ├── auto_deploy.py                 ← re-run `tools/deploy/deploy.py` (optional)
     ├── staging.py                     ← build HF model-repo layout
     ├── metrics.py                     ← `summary.json` (+ optional pkl) → `metrics.json`
     └── card.py                        ← `README.md` (model card) as hand-rolled template
@@ -336,22 +335,15 @@ python tools/release.py \
 
 Hugging Face auth uses the normal `huggingface_hub` flow (`HF_TOKEN` or `huggingface-cli login`). New repos are **private** by default; pass `--public` for a public model repo.
 
-**With ONNX** (after a local `tools/deploy/deploy.py` run): pass `--deploy` to the directory that contains `end2end.onnx` (e.g. `work_dirs/<exp>/deploy/onnx`).
-
-**Auto-re-export** if the checkpoint is newer than the ONNX (or ONNX is missing): add `--auto-deploy` and also:
-
-- `--deploy-cfg` — mmdeploy deploy config (e.g. `configs/deploy/...py`)
-- `--deploy-sample` — an input image for export tracing
-- If `--deploy` is omitted, it defaults to `<exp-dir>/deploy/onnx`.
+**With ONNX** (after a local `tools/deploy/deploy.py` run): pass `--deploy` to the directory that contains `end2end.onnx` (e.g. `work_dirs/<exp>/deploy/onnx`). ONNX conversion is **always a separate step** — run `tools/deploy/deploy.py` first, then pass the output dir to `--deploy`.
 
 **Other flags:**
 
-- `--model-cfg` — defaults to the first `*.py` in `--exp-dir` (same as the summarizer)
 - `--metrics-pkl` — optional eval pickle; merged into `metrics.json` as `eval_extra` (shallow, JSON-safe)
 - `--samples-in` + `--samples-out` — copy demo images to `samples/input.jpg` and `samples/output.png`
 - `--dry-run` — build the release tree in a temp dir and list files; no Hub call (no `huggingface_hub` required)
 
-**Exit codes:** `0` success, `2` validation (missing files, git policy), `3` deploy subprocess or Hugging Face API error.
+**Exit codes:** `0` success, `2` validation (missing files, git policy), `3` Hugging Face API error.
 
 **Local provenance after a real upload:** `work_dirs/<exp>/release.json` (repo, tag, pth, git sha, has_onnx, time).
 
