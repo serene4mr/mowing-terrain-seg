@@ -3,6 +3,8 @@ import argparse
 import logging
 import os
 import os.path as osp
+import sys
+from pathlib import Path
 
 import mowing_terrain_seg
 
@@ -48,6 +50,12 @@ def parse_args():
     # will pass the `--local-rank` parameter to `tools/train.py` instead
     # of `--local_rank`.
     parser.add_argument('--local_rank', '--local-rank', type=int, default=0)
+    parser.add_argument(
+        '--no-summarize',
+        action='store_true',
+        default=False,
+        help='Skip writing summary.json after training.',
+    )
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
@@ -102,6 +110,25 @@ def main():
 
     # start training
     runner.train()
+
+    if not args.no_summarize:
+        _repo = Path(__file__).resolve().parent.parent
+        if str(_repo) not in sys.path:
+            sys.path.insert(0, str(_repo))
+        try:
+            from tools.summarize_experiment import summarize
+            p = summarize(str(runner.work_dir))
+            print_log(
+                f'Summary written to {p}',
+                logger='current',
+                level=logging.INFO,
+            )
+        except Exception as e:  # noqa: BLE001
+            print_log(
+                f'Summary generation failed: {e}',
+                logger='current',
+                level=logging.WARNING,
+            )
 
 
 if __name__ == '__main__':

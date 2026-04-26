@@ -1,0 +1,6 @@
+{"loss": 1.0, "step": 50}
+{"val/aAcc": 30.0, "val/mIoU": 10.0, "val/mAcc": 20.0, "val/mDice": 1.0, "val/mFscore": 1.0, "val/mPrecision": 1.0, "val/mRecall": 1.0, "step": 100}
+{"loss": 1.0, "step": 150}
+{"val/aAcc": 32.0, "val/mIoU": 20.0, "val/mAcc": 22.0, "val/mDice": 2.0, "val/mFscore": 2.0, "val/mPrecision": 2.0, "val/mRecall": 2.0, "step": 200}
+{"loss": 1.0, "step": 250}
+{"val/aAcc": 28.0, "val/mIoU": 15.0, "val/mAcc": 18.0, "val/mDice": 1.0, "val/mFscore": 1.0, "val/mPrecision": 1.0, "val/mRecall": 1.0, "step": 300}

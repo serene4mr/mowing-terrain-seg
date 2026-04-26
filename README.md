@@ -60,6 +60,8 @@ python tools/train.py \
     --work-dir work_dirs/my_experiment
 ```
 
+On successful finish, a curated `work_dirs/<experiment>/summary.json` is written (val metrics, history, per-class IoU from the log, git/env). To skip, pass `--no-summarize`. To regenerate: `python tools/summarize_experiment.py <work_dir>`. See `docs/mlops.md`.
+
 ### Inference
 
 Run inference on images, videos, or live streams.

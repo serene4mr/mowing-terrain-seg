@@ -167,17 +167,34 @@ python tools/train.py \
     --work-dir work_dirs/dlv3p_r50_ycor_v1
 ```
 
-Output (already produced by mmengine today):
+Output (mmengine run layout under the experiment work dir):
 ```
 work_dirs/dlv3p_r50_ycor_v1/
-├── config.py                # saved by mmengine
-├── *.pth                    # checkpoints
+├── <YYYYMMDD_HHMMSS>/       # one folder per start/resume; latest is what summarizer reads
+│   ├── <YYYYMMDD_HHMMSS>.log
+│   └── vis_data/
+│       ├── scalars.json     # jsonl: train + val (canonical)
+│       ├── config.py        # resolved config snapshot
+│       └── 2026....json     # duplicate of scalars (mmengine; ignore in tooling)
+├── *.py                      # e.g. copy of the training config at work_dir root
 ├── best_val_mIoU_iter_*.pth
-├── scalars.json             # metrics over time
-└── vis_data/
+├── iter_*.pth, last_checkpoint
+└── summary.json              # **written at end of `tools/train.py` (or via CLI below)**
 ```
 
-**Nothing is pushed yet.** Train as many candidates as you want.
+After a successful `runner.train()` call, the repo automatically runs `tools.summarize_experiment.summarize(work_dir)`.
+
+`summary.json` (schema v1) consolidates: best/last val metrics, downsampled `history`, dataset metadata from `vis_data/config.py`, `config_sha256` of the work_dir root `*.py` config, git `sha` (when in a git checkout), and environment versions. Per-class IoU/Acc (when available) is parsed from the **train** `<run>.log` (not from `scalars.json`).
+
+**Retroactive / manual:**
+
+```bash
+python tools/summarize_experiment.py work_dirs/dlv3p_r50_ycor_v1
+```
+
+Use `--no-summarize` on `tools/train.py` to skip (e.g. fast smoke tests). Summary failures are logged as a warning and do not fail the training run.
+
+**Nothing is pushed to Hugging Face yet.** Train as many candidates as you want; promotion is a separate step.
 
 ### Stage B: Evaluate
 
