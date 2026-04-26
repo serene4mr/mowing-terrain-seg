@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mowing-terrain-seg"
+version = "0.1.0"
+description = "Mowing / off-road terrain semantic segmentation (MMSegmentation)"
+readme = "README.md"
+requires-python = ">=3.8"
+# Full training/deploy stack: use requirements.txt (MMCV from OpenMMLab index, etc.)
+dependencies = [
+    "numpy<2",
+    "mmengine>=0.7.0",
+    "tqdm>=4.64.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "onnx>=1.12", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+extend-exclude = [".venv", "work_dirs", "work_dirs_old", "mmdeploy_model"]
+
+[tool.ruff.lint]
+ignore = ["E501", "E402"]

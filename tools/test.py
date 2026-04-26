@@ -3,6 +3,10 @@ import argparse
 import os
 import os.path as osp
 
+import mowing_terrain_seg
+
+mowing_terrain_seg.register_all()
+
 from mmengine.config import Config, DictAction
 from mmengine.runner import Runner
 

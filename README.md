@@ -16,9 +16,14 @@ This project provides tools and models for semantic segmentation of off-road ter
 
 ## Installation
 
+Install PyTorch, MMCV, and OpenMMLab stack (see `requirements.txt` for exact pins, including the MMCV prebuilt wheel URL), then install this repo in editable mode so `mowing_terrain_seg` and CLI scripts resolve imports without `sys.path` hacks:
+
 ```bash
 pip install -r requirements.txt
+pip install -e .
 ```
+
+Optional dev tools: `pip install -e ".[dev]"` (pytest, ruff, onnx for tests).
 
 ## Quick Start
 
@@ -158,6 +163,10 @@ python tools/deploy/deploy.py ... --show
 - PyTorch >= 1.13.0
 - MMSegmentation >= 1.0.0
 - See `requirements.txt` for full list
+
+## Changelog (configs)
+
+- Training configs use `type='FixedCrossEntropyLoss'` (see `src/mowing_terrain_seg/models/losses/cross_entropy_loss.py`) instead of monkey-patching MMSeg’s `cross_entropy`; older `work_dirs/` runs may reference `CrossEntropyLoss` in saved `config.py` copies.
 
 ## License
 

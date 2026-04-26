@@ -48,3 +48,8 @@ ENV LD_LIBRARY_PATH=/opt/onnxruntime/lib:/usr/local/cuda-11.8/lib64:/usr/lib/x86
 # ── Python packages ───────────────────────────────────────────────────────────
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Editable install of this repo (import `mowing_terrain_seg` without PYTHONPATH)
+COPY pyproject.toml README.md /tmp/mts/
+COPY src /tmp/mts/src
+RUN pip install --no-cache-dir -e /tmp/mts

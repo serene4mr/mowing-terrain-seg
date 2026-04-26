@@ -5,6 +5,8 @@ from PIL import Image
 from mmseg.datasets import BaseSegDataset
 from mmseg.registry import DATASETS
 
+from mowing_terrain_seg.utils.logger import LOGGER
+
 @DATASETS.register_module()
 class YCORDataset(BaseSegDataset):
     """YCOR dataset for off-road navigation segmentation.
@@ -103,12 +105,12 @@ class YCORDataset(BaseSegDataset):
                             missing.append('rgb.jpg')
                         if not os.path.exists(labels_file):
                             missing.append('labels.png')
-                        print(f"Warning: Missing files in {sample_path}: {missing}")
+                        LOGGER.warning("Missing files in %s: %s", sample_path, missing)
         
         if not data_list:
             raise ValueError(f"No valid data samples found in {data_root}")
         
-        print(f"Loaded {len(data_list)} samples from YCOR dataset")
+        LOGGER.info("Loaded %d samples from YCOR dataset", len(data_list))
         return data_list
     
     def _get_default_metainfo(self):
@@ -171,6 +173,8 @@ class YCORLawnMowing3ClassDataset(YCORDataset):
         self.lookup_table = np.zeros(256, dtype=np.int64)
         for old_label, new_label in self.label_map.items():
             self.lookup_table[old_label] = new_label
+        # On-device remapping: avoid per-batch CPU roundtrip
+        self.lookup_table_t = torch.from_numpy(self.lookup_table)
     
     def __getitem__(self, idx):
         """Get data sample with optimized label remapping."""
@@ -195,11 +199,10 @@ class YCORLawnMowing3ClassDataset(YCORDataset):
         return results
     
     def _remap_tensor(self, gt_seg):
-        """Optimized tensor remapping using vectorized operations."""
-        # Convert to numpy for lookup, then back to tensor
-        gt_seg_np = gt_seg.cpu().numpy()
-        gt_seg_remapped = self.lookup_table[gt_seg_np]
-        return torch.from_numpy(gt_seg_remapped).to(gt_seg.device)
+        """Vectorized remapping on the same device as ``gt_seg``."""
+        # Cast pixel indices to int64; gather from broadcast lookup table
+        t = self.lookup_table_t.to(device=gt_seg.device, dtype=torch.int64)
+        return t[gt_seg.long()]
     
     def _remap_numpy(self, gt_seg):
         """Optimized numpy remapping using lookup table."""

@@ -2,11 +2,12 @@
 import argparse
 import os.path as osp
 
+import mowing_terrain_seg
+
 from mmengine.config import Config, DictAction
 from mmengine.utils import ProgressBar
 
 from mmseg.registry import DATASETS, VISUALIZERS
-from mmseg.utils import register_all_modules
 
 
 def parse_args():
@@ -43,8 +44,7 @@ def main():
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
 
-    # register all modules in mmdet into the registries
-    register_all_modules()
+    mowing_terrain_seg.register_all()
 
     dataset = DATASETS.build(cfg.train_dataloader.dataset)
     visualizer = VISUALIZERS.build(cfg.visualizer)

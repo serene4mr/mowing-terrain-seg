@@ -1,23 +1,19 @@
-
 import argparse
+import math
 import os
 import os.path as osp
-import sys
-import numpy as np
 from collections import Counter
-import math
 
-# Add src directory to Python path for custom datasets
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+import numpy as np
 
-# Import all custom datasets to register them
-import src
+import mowing_terrain_seg
+
+mowing_terrain_seg.register_all()
 
 from mmengine.config import Config, DictAction
 from mmengine.utils import ProgressBar
 
 from mmseg.registry import DATASETS
-from mmseg.utils import register_all_modules
 
 
 def calculate_class_weights(class_counts, total_pixels, num_classes):
@@ -64,6 +60,22 @@ def calculate_class_weights(class_counts, total_pixels, num_classes):
     return weights
 
 
+def iter_class_pixel_counts(dataset):
+    """Aggregate per-class pixel counts over a segmentation dataset."""
+    class_pixel_counts = Counter()
+    total_pixels = 0
+    progress_bar = ProgressBar(len(dataset))
+    for item in dataset:
+        seg_data = item["data_samples"].gt_sem_seg.data.squeeze()
+        seg_map = seg_data.numpy() if hasattr(seg_data, "numpy") else seg_data
+        unique, counts = np.unique(seg_map, return_counts=True)
+        for class_id, count in zip(unique, counts):
+            class_pixel_counts[class_id] += count
+            total_pixels += count
+        progress_bar.update()
+    return class_pixel_counts, total_pixels
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Analyze Dataset')
     parser.add_argument('--config', help='train config file path')
@@ -92,9 +104,6 @@ def main():
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
 
-    # register all modules in mmseg into the registries
-    register_all_modules()
-    
     # Capture all output if output_dir is specified
     output_lines = []
     
@@ -125,29 +134,11 @@ def main():
     print_and_save(f"Number of classes: {len(classes)}")
     print_and_save(f"Classes: {classes}")
     
-    # Count pixels for each class
-    train_class_pixel_counts = Counter()
-    train_total_pixels = 0
-    
     print_and_save(f"\nProcessing {len(train_dataset)} samples...")
-    progress_bar = ProgressBar(len(train_dataset))
-    
-    for i, item in enumerate(train_dataset):
-        # Get segmentation mask
-        seg_data = item['data_samples'].gt_sem_seg.data.squeeze()
-        if hasattr(seg_data, 'numpy'):
-            seg_map = seg_data.numpy()
-        else:
-            seg_map = seg_data
-        
-        # Count pixels for each class
-        unique, counts = np.unique(seg_map, return_counts=True)
-        for class_id, count in zip(unique, counts):
-            train_class_pixel_counts[class_id] += count
-            train_total_pixels += count
-        
-        progress_bar.update()
-    
+    train_class_pixel_counts, train_total_pixels = iter_class_pixel_counts(
+        train_dataset
+    )
+
     # Calculate percentages
     print_and_save(f"\n{'='*60}")
     print_and_save(f"CLASS DISTRIBUTION ANALYSIS - TRAINING")
@@ -175,29 +166,11 @@ def main():
     print_and_save(f"Number of classes: {len(classes)}")
     print_and_save(f"Classes: {classes}")
     
-    # Count pixels for each class
-    valid_class_pixel_counts = Counter()
-    valid_total_pixels = 0
-    
     print_and_save(f"\nProcessing {len(valid_dataset)} samples...")
-    progress_bar = ProgressBar(len(valid_dataset))
-    
-    for i, item in enumerate(valid_dataset):
-        # Get segmentation mask
-        seg_data = item['data_samples'].gt_sem_seg.data.squeeze()
-        if hasattr(seg_data, 'numpy'):
-            seg_map = seg_data.numpy()
-        else:
-            seg_map = seg_data
-        
-        # Count pixels for each class
-        unique, counts = np.unique(seg_map, return_counts=True)
-        for class_id, count in zip(unique, counts):
-            valid_class_pixel_counts[class_id] += count
-            valid_total_pixels += count
-        
-        progress_bar.update()
-    
+    valid_class_pixel_counts, valid_total_pixels = iter_class_pixel_counts(
+        valid_dataset
+    )
+
     # Calculate percentages
     print_and_save(f"\n{'='*60}")
     print_and_save(f"CLASS DISTRIBUTION ANALYSIS - VALIDATION")

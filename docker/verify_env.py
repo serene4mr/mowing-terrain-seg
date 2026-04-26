@@ -65,6 +65,16 @@ def main():
     except ImportError as e:
         results.append(check("4. OpenMMLab", str(e), False))
 
+    try:
+        import mowing_terrain_seg
+
+        mowing_terrain_seg.register_all()
+        results.append(
+            check("4b. mowing_terrain_seg", "import + register_all", True)
+        )
+    except Exception as e:  # noqa: BLE001
+        results.append(check("4b. mowing_terrain_seg", str(e), False))
+
     # ── 5. ORT C++ SDK tarball ────────────────────────────────────────────────
     ort_libs = glob.glob("/opt/onnxruntime/lib/libonnxruntime*.so*")
     has_cuda   = any("providers_cuda"   in l for l in ort_libs)

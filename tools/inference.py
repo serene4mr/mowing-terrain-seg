@@ -1,6 +1,5 @@
 import argparse
 import os
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -10,11 +9,12 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-# Add project root to sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import mowing_terrain_seg
 
-from src.mowing_terrain_seg.inference import SegPredictor, Backend, InferenceSource, SourceType, InferenceTimer
-from src.mowing_terrain_seg.utils.logger import LOGGER
+mowing_terrain_seg.register_all()
+
+from mowing_terrain_seg.inference import SegPredictor, Backend, InferenceSource, SourceType, InferenceTimer
+from mowing_terrain_seg.utils.logger import LOGGER
 
 
 def parse_args():
@@ -26,8 +26,8 @@ def parse_args():
                              help='Path to model config file (.py or pipeline.json)')
     model_group.add_argument('--model-uri', '-m', required=True, 
                              help='Path to model weights/checkpoint file (.pth, .onnx, or .engine)')
-    model_group.add_argument('--backend', '-b', type=str, default='torch', 
-                        choices=['torch', 'onnx', 'tensorrt'], help='Inference backend')
+    model_group.add_argument('--backend', '-b', type=str, default='torch',
+                        choices=['torch', 'onnx'], help='Inference backend')
     model_group.add_argument('--device', default='cuda:0', help='Device used for inference')
 
     # Data I/O arguments

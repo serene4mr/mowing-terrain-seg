@@ -3,13 +3,10 @@ import argparse
 import logging
 import os
 import os.path as osp
-import sys
 
-# Add src directory to Python path for custom datasets
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+import mowing_terrain_seg
 
-# Import all custom datasets to register them
-import src  # This will import all datasets from src/__init__.py
+mowing_terrain_seg.register_all()
 
 from mmengine.config import Config, DictAction
 from mmengine.logging import print_log

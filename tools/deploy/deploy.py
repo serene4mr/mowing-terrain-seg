@@ -32,13 +32,12 @@ import argparse
 import logging
 import os
 import os.path as osp
-from collections import defaultdict
+import sys
 from functools import partial
 
 import mmengine
 import onnx
 import torch.multiprocessing as mp
-from onnx import helper
 from torch.multiprocessing import Process, set_start_method
 
 from mmdeploy.apis import (create_calib_input_data, extract_model,
@@ -51,168 +50,20 @@ from mmdeploy.utils import (IR, Backend, get_backend, get_calib_filename,
                             get_ir_config, get_partition_config,
                             get_root_logger, load_config, target_wrapper)
 
-# ----- Inlined rewrite logic (no import from rewrite_custom_ops_onnx) -----
-_CUSTOM_DOMAINS = ("mmdeploy", "mmcv")
-_STANDARD_OPSET_REQUIRED = {"GridSample": 13, "RoiAlign": 16}
-_MODE_MAP = {0: "bilinear", 1: "nearest", 2: "bicubic"}
-_PADDING_MAP = {0: "zeros", 1: "border", 2: "reflection"}
+_DEPLOY_DIR = os.path.dirname(os.path.abspath(__file__))
+if _DEPLOY_DIR not in sys.path:
+    sys.path.insert(0, _DEPLOY_DIR)
+from _onnx_rewriter import rewrite_model_in_memory  # noqa: E402
 
 
-def _get_attr(node, name, default=0):
-    for a in node.attribute:
-        if a.name == name:
-            return a.i
-    return default
-
-
-def _get_attr_f(node, name, default=0.0):
-    for a in node.attribute:
-        if a.name == name:
-            return a.f
-    return default
-
-
-def _get_attr_s(node, name, default=""):
-    for a in node.attribute:
-        if a.name == name:
-            if a.s:
-                return a.s.decode("utf-8") if isinstance(a.s, bytes) else a.s
-            return default
-    return default
-
-
-def _rewrite_mmdeploy_grid_sampler(node):
-    interp = _get_attr(node, "interpolation_mode_i", 0)
-    padding = _get_attr(node, "padding_mode_i", 0)
-    align = _get_attr(node, "align_corners_i", 0)
-    mode_s = _MODE_MAP.get(interp, "bilinear")
-    padding_s = _PADDING_MAP.get(padding, "zeros")
-    align_corners = 1 if align else 0
-    new_node = helper.make_node(
-        "GridSample",
-        inputs=list(node.input),
-        outputs=list(node.output),
-        name=node.name + "_GridSample" if node.name else None,
-        mode=mode_s,
-        padding_mode=padding_s,
-        align_corners=align_corners,
-    )
-    return [new_node]
-
-
-def _rewrite_mmcv_roi_align(node):
-    out_h = _get_attr(node, "output_height_i", _get_attr(node, "aligned_height", 1))
-    out_w = _get_attr(node, "output_width_i", _get_attr(node, "aligned_weight", 1))
-    spatial_scale = _get_attr_f(node, "spatial_scale_f", _get_attr_f(node, "spatial_scale", 1.0))
-    sampling_ratio = _get_attr(node, "sampling_ratio_i", _get_attr(node, "sampling_ratio", 0))
-    mode = _get_attr_s(node, "pool_mode") or _get_attr_s(node, "mode_s") or "avg"
-    if mode not in ("avg", "max"):
-        mode = "avg"
-    aligned = _get_attr(node, "aligned", 0)
-    coord_mode = "half_pixel" if aligned else "output_half_pixel"
-    if len(node.input) < 2:
-        return []
-    inputs = list(node.input)
-    if len(inputs) == 2:
-        return []
-    new_node = helper.make_node(
-        "RoiAlign",
-        inputs=inputs,
-        outputs=list(node.output),
-        name=node.name + "_RoiAlign" if node.name else None,
-        mode=mode,
-        output_height=out_h,
-        output_width=out_w,
-        sampling_ratio=sampling_ratio,
-        spatial_scale=spatial_scale,
-        coordinate_transformation_mode=coord_mode,
-    )
-    return [new_node]
-
-
-_REPLACEMENT_REGISTRY = {
-    ("mmdeploy", "grid_sampler"): _rewrite_mmdeploy_grid_sampler,
-    ("mmcv", "MMCVRoIAlign"): _rewrite_mmcv_roi_align,
-    ("mmcv", "RoIAlign"): _rewrite_mmcv_roi_align,
-}
-
-
-def _ensure_opset(model, min_version):
-    opset_domain = ""
-    for imp in model.opset_import:
-        if imp.domain == opset_domain:
-            if imp.version < min_version:
-                imp.version = min_version
-            return
-    model.opset_import.append(helper.make_opsetid(opset_domain, min_version))
-
-
-def _rewrite_model_in_memory(model, logger=None):
-    """Apply custom-op replacements to an ONNX model in memory. Returns (model, replaced_count, kept_custom)."""
-    min_opset = max(_STANDARD_OPSET_REQUIRED.values())
-    _ensure_opset(model, min_opset)
-
-    new_nodes = []
-    replaced_count = 0
-    kept_custom = defaultdict(int)
-
-    for node in model.graph.node:
-        domain = node.domain or ""
-        op_type = node.op_type
-        key = (domain, op_type)
-
-        if domain in _CUSTOM_DOMAINS:
-            rewriter = _REPLACEMENT_REGISTRY.get(key)
-            if rewriter is not None:
-                try:
-                    replacement_nodes = rewriter(node)
-                    if replacement_nodes:
-                        new_nodes.extend(replacement_nodes)
-                        replaced_count += 1
-                    else:
-                        new_nodes.append(node)
-                        kept_custom[key] += 1
-                except Exception as e:
-                    new_nodes.append(node)
-                    kept_custom[key] += 1
-                    if logger:
-                        logger.warning(
-                            f"Replacement failed for {domain}::{op_type} ({node.name}): {e}"
-                        )
-            else:
-                new_nodes.append(node)
-                kept_custom[key] += 1
-        else:
-            new_nodes.append(node)
-
-    del model.graph.node[:]
-    model.graph.node.extend(new_nodes)
-    return model, replaced_count, kept_custom
-
-
-def rewrite_custom_ops(path_in: str, path_out: str, logger=None):
-    """Replace mmdeploy/mmcv custom ops with standard ONNX. Inlined (no import)."""
-    model = onnx.load(path_in)
-    model, replaced_count, kept_custom = _rewrite_model_in_memory(model, logger=logger)
-    onnx.save(model, path_out)
-
-    if logger:
-        logger.info(f"Rewrite: saved {path_out}, replaced {replaced_count} custom op(s).")
-        if kept_custom:
-            for (dom, op), count in sorted(kept_custom.items()):
-                logger.info(f"  Kept {dom}::{op}: {count} node(s)")
-    return replaced_count
-
-
-# ----- Deploy (same as deploy.py) -----
 def parse_args():
     parser = argparse.ArgumentParser(
         description='Export model to backends, then rewrite custom ops to standard ONNX.'
     )
-    parser.add_argument('--deploy-cfg', help='deploy config path')
-    parser.add_argument('--model-cfg', help='model config path')
-    parser.add_argument('--checkpoint', help='model checkpoint path')
-    parser.add_argument('--img', help='image used to convert model model')
+    parser.add_argument('deploy_cfg', help='deploy config path')
+    parser.add_argument('model_cfg', help='model config path')
+    parser.add_argument('checkpoint', help='model checkpoint path')
+    parser.add_argument('img', help='image used to convert model')
     parser.add_argument(
         '--test-img',
         default=None,
@@ -253,6 +104,11 @@ def parse_args():
         '--no-rewrite',
         action='store_true',
         help='Skip rewriting custom ops to standard ONNX (only run deploy).')
+    parser.add_argument(
+        '--allow-custom-ops',
+        action='store_true',
+        help='Do not exit with error if custom mmdeploy/mmcv ops remain after rewrite.',
+    )
     args = parser.parse_args()
     return args
 
@@ -439,17 +295,26 @@ def main():
 
     # Rewrite custom ops in memory, then write once to the same ONNX file (no temp file)
     if backend == Backend.ONNXRUNTIME and not args.no_rewrite:
+        any_kept = False
         for bf in backend_files:
             if bf.endswith('.onnx') and osp.isfile(bf):
                 model = onnx.load(bf)
-                model, replaced_count, kept_custom = _rewrite_model_in_memory(model, logger=logger)
+                model, replaced_count, kept_custom = rewrite_model_in_memory(
+                    model, logger=logger)
                 onnx.save(model, bf)
                 logger.info(
                     f"Rewritten (standard ops) in place: {bf}, replaced {replaced_count} custom op(s)."
                 )
                 if kept_custom:
+                    any_kept = True
                     for (dom, op), count in sorted(kept_custom.items()):
                         logger.info(f"  Kept {dom}::{op}: {count} node(s)")
+        if any_kept and not args.allow_custom_ops:
+            logger.error(
+                'Custom mmdeploy/mmcv ops remain after rewrite. '
+                'Re-run with --allow-custom-ops to allow, or fix the model / deploy config.'
+            )
+            sys.exit(2)
 
     if backend == Backend.NCNN and quant:
         from onnx2ncnn_quant_table import get_table
