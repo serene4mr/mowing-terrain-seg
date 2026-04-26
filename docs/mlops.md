@@ -242,6 +242,33 @@ work_dirs/dlv3p_r50_ycor_v1/deploy/onnx/
 
 **Implemented:** [tools/release.py](tools/release.py) (opt-in: `pip install -e ".[release]"`).
 
+#### Prerequisites — Hugging Face account & auth
+
+1. **Create a Hugging Face account** at [huggingface.co](https://huggingface.co) if you don't have one.
+2. **Generate a write token**: Account → Settings → Access Tokens → New token → Role: **Write**.
+3. **Authenticate** on your machine (one-time):
+
+   ```bash
+   # Option A — environment variable (CI-friendly, session-scoped)
+   export HF_TOKEN=hf_...
+
+   # Option B — interactive login (stored in ~/.cache/huggingface/token)
+   huggingface-cli login
+   ```
+
+4. **Install the release extra** (adds `huggingface_hub`):
+
+   ```bash
+   pip install -e ".[release]"
+   ```
+
+The target HF repository (`--repo-id`) is **created automatically** by `release.py` if it does not
+exist yet — you do not need to create it manually. New repos default to **private**; pass `--public`
+to make them public. The `--repo-id` must be under an org or username you have write access to
+(e.g. `yourname/mts-deeplabv3plus-r50-ycor3cls`).
+
+#### Command
+
 ```bash
 python tools/release.py \
     --exp-dir work_dirs/dlv3p_r50_ycor_v1 \
