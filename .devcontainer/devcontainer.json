@@ -1,8 +1,8 @@
 {
   "name": "mowing-terrain-seg-dev-env",
   "build": {
-    "dockerfile": "Dockerfile",
-    "context": ".",
+    "dockerfile": "../docker/Dockerfile",
+    "context": "..",
     "args": {
       "USERNAME": "${localEnv:USER}"
     }
@@ -23,6 +23,8 @@
     "-v", "/dev:/dev"
   ],
 
+  // packages are baked into docker/Dockerfile; uncomment only if you want
+  // to reinstall after a requirements.txt change without rebuilding the image
   // "postCreateCommand": "pip install -r requirements.txt",
 
   "customizations": {

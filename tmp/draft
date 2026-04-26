@@ -1,0 +1,27 @@
+pip install -U openmim
+mim install "mmcv==2.1.0"
+mim install "mmdet==3.3.0"
+mim install "mmsegmentation"
+
+python -m mim install "mmcv==2.1.0"
+python -m mim install "mmdet==3.3.0"
+python -m mim install "mmsegmentation"
+
+
+pip install "mmcv==2.1.0" -f \
+  https://download.openmmlab.com/mmcv/dist/cu118/torch2.1/index.html
+pip install "mmdet==3.3.0"
+pip install "mmsegmentation"
+
+
+# test
+source .venv/bin/activate
+
+python - << 'EOF'
+import numpy as np, torch, mmcv, mmseg, mmdet, os
+print("NumPy:", np.__version__, os.path.dirname(np.__file__))
+print("Torch:", torch.__version__, os.path.dirname(torch.__file__))
+print("MMCV:", mmcv.__version__)
+print("MMSeg:", mmseg.__version__)
+print("MMDet:", mmdet.__version__)
+EOF

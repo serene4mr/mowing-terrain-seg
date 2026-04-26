@@ -129,33 +129,33 @@ class BasePredictor:
                 
                 # Try to register custom ops if available (mmcv/mmdeploy)
                 sess_options = None
-                # Try mmcv first (common case)
-                try:
-                    from mmcv.ops import get_onnxruntime_op_path
-                    import os
-                    custom_op_path = get_onnxruntime_op_path()
-                    if custom_op_path and os.path.exists(custom_op_path):
-                        sess_options = ort.SessionOptions()
-                        sess_options.register_custom_ops_library(custom_op_path)
-                        LOGGER.info(f"Registered mmcv custom ops from: {custom_op_path}")
-                except (ImportError, AttributeError, FileNotFoundError):
-                    # Try mmdeploy alternative path
-                    try:
-                        import mmdeploy
-                        import os.path as osp
-                        # Common paths for mmdeploy custom ops
-                        possible_paths = [
-                            osp.join(osp.dirname(mmdeploy.__file__), 'lib', 'libmmdeploy_onnxruntime_ops.so'),
-                            osp.join(osp.dirname(mmdeploy.__file__), 'lib', 'mmdeploy_onnxruntime_ops.so'),
-                        ]
-                        for custom_op_path in possible_paths:
-                            if osp.exists(custom_op_path):
-                                sess_options = ort.SessionOptions()
-                                sess_options.register_custom_ops_library(custom_op_path)
-                                LOGGER.info(f"Registered mmdeploy custom ops from: {custom_op_path}")
-                                break
-                    except (ImportError, FileNotFoundError):
-                        pass  # Custom ops not available, will try standard loading
+                # # Try mmcv first (common case)
+                # try:
+                #     from mmcv.ops import get_onnxruntime_op_path
+                #     import os
+                #     custom_op_path = get_onnxruntime_op_path()
+                #     if custom_op_path and os.path.exists(custom_op_path):
+                #         sess_options = ort.SessionOptions()
+                #         sess_options.register_custom_ops_library(custom_op_path)
+                #         LOGGER.info(f"Registered mmcv custom ops from: {custom_op_path}")
+                # except (ImportError, AttributeError, FileNotFoundError):
+                #     # Try mmdeploy alternative path
+                #     try:
+                #         import mmdeploy
+                #         import os.path as osp
+                #         # Common paths for mmdeploy custom ops
+                #         possible_paths = [
+                #             osp.join(osp.dirname(mmdeploy.__file__), 'lib', 'libmmdeploy_onnxruntime_ops.so'),
+                #             osp.join(osp.dirname(mmdeploy.__file__), 'lib', 'mmdeploy_onnxruntime_ops.so'),
+                #         ]
+                #         for custom_op_path in possible_paths:
+                #             if osp.exists(custom_op_path):
+                #                 sess_options = ort.SessionOptions()
+                #                 sess_options.register_custom_ops_library(custom_op_path)
+                #                 LOGGER.info(f"Registered mmdeploy custom ops from: {custom_op_path}")
+                #                 break
+                #     except (ImportError, FileNotFoundError):
+                #         pass  # Custom ops not available, will try standard loading
                 
                 try:
                     if sess_options is not None:
