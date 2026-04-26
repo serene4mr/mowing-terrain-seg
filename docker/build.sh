@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TAG="base"
+TAG="latest"
 PUSH=false
 NO_CACHE=false
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,7 +43,7 @@ parse_args() {
 }
 
 build_image() {
-  local image="ghcr.io/serene/mowing-terrain-seg:${TAG}"
+  local image="ghcr.io/serene4mr/mowing-terrain-seg:${TAG}"
   local build_args=()
 
   if [[ "${NO_CACHE}" == "true" ]]; then

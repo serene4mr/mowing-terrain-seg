@@ -5,8 +5,13 @@
     "context": "..",
     "args": {
       "USERNAME": "${localEnv:USER}",
-      "BASE_IMAGE": "ghcr.io/serene/mowing-terrain-seg:base"
-    }
+      "USER_UID": "1000",
+      "USER_GID": "1000"
+    },
+    "options": [
+        "--pull=false",
+        "--build-arg", "BASE_IMAGE=ghcr.io/serene4mr/mowing-terrain-seg:latest"
+    ]
   },
 
   "remoteUser": "${localEnv:USER}",
