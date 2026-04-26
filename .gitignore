@@ -103,6 +103,8 @@ work_dirs/
 work_dirs_old/
 mlruns/
 
+tmp/
+
 
 assets/
 inference_out/
