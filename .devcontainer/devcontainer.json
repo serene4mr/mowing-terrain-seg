@@ -1,14 +1,15 @@
 {
   "name": "mowing-terrain-seg-dev-env",
   "build": {
-    "dockerfile": "../docker/Dockerfile",
+    "dockerfile": "Dockerfile",
     "context": "..",
     "args": {
-      "USERNAME": "${localEnv:USER}"
+      "USERNAME": "${localEnv:USER}",
+      "BASE_IMAGE": "mowing-seg:base"
     }
   },
 
-  "remoteUser": "serene",
+  "remoteUser": "${localEnv:USER}",
   "updateRemoteUserUID": true,
 
   "runArgs": [
@@ -23,7 +24,7 @@
     "-v", "/dev:/dev"
   ],
 
-  // packages are baked into docker/Dockerfile; uncomment only if you want
+  // Python deps are in the base image (docker/Dockerfile → mowing-seg:base). Uncomment only if you want
   // to reinstall after a requirements.txt change without rebuilding the image
   // "postCreateCommand": "pip install -r requirements.txt",
 

@@ -1,5 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# mowing-terrain-seg  –  development image
+# mowing-terrain-seg  –  base image
+#   docker build -t mowing-seg:base -f docker/Dockerfile .
+#   (run from repo root so requirements.txt is in build context)
+#
+# For dev with a non-root user, use .devcontainer/Dockerfile (FROM this image).
 #
 # Stack:
 #   PyTorch  2.1.2  +  CUDA 11.8  +  cuDNN 8
@@ -15,9 +19,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 FROM pytorch/pytorch:2.1.2-cuda11.8-cudnn8-devel
 
-ARG USERNAME
-ARG USER_UID=1000
-ARG USER_GID=${USER_UID}
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ── System packages ───────────────────────────────────────────────────────────
@@ -47,12 +48,3 @@ ENV LD_LIBRARY_PATH=/opt/onnxruntime/lib:/usr/local/cuda-11.8/lib64:/usr/lib/x86
 # ── Python packages ───────────────────────────────────────────────────────────
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
-
-# ── Non-root user ─────────────────────────────────────────────────────────────
-RUN groupadd --gid ${USER_GID} ${USERNAME} \
-    && useradd -m -s /bin/bash --uid ${USER_UID} --gid ${USER_GID} ${USERNAME} \
-    && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
-    && chmod 0440 /etc/sudoers.d/${USERNAME}
-
-USER ${USERNAME}
-WORKDIR /home/${USERNAME}
