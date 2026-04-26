@@ -25,6 +25,15 @@ pip install -e .
 
 Optional dev tools: `pip install -e ".[dev]"` (pytest, ruff, onnx for tests).
 
+**Releasing models to Hugging Face Hub:** opt-in with `pip install -e ".[release]"` (adds `huggingface_hub`), then e.g.:
+
+```bash
+python tools/release.py --exp-dir work_dirs/<your_exp> --pth best_val_mIoU_iter_5000.pth \
+  --repo-id <org>/mts-... --tag v1.0.0 --message "Notes" --dry-run --allow-dirty
+```
+
+Use `--deploy work_dirs/.../deploy/onnx` to include a prior ONNX export; see **§6** in [docs/mlops.md](docs/mlops.md) for the full flag list, drift check, and auth.
+
 ## Quick Start
 
 ### Training

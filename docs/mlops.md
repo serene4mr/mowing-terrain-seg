@@ -1,6 +1,6 @@
 # MLOps Design — `mowing-terrain-seg` × Hugging Face Hub
 
-Status: **Proposal / design doc** (not yet implemented)
+Status: **MLOps design** — `tools/release.py` and `work_dirs/.../summary.json` are implemented; HF promotion is **manual** (opt-in `pip install -e ".[release]"`)
 Scope: training → evaluation → deploy export → release → consumption
 Artifact store: **Hugging Face Hub** (one repo per model variant)
 Code host: **GitHub** (this repo)
@@ -232,7 +232,7 @@ work_dirs/dlv3p_r50_ycor_v1/deploy/onnx/
 
 ### Stage D: Release (manual, deliberate)
 
-This is the **one** new tool to add: `tools/release.py`.
+**Implemented:** [tools/release.py](tools/release.py) (opt-in: `pip install -e ".[release]"`).
 
 ```bash
 python tools/release.py \
@@ -245,14 +245,12 @@ python tools/release.py \
 ```
 
 What it does:
-1. Validates the experiment dir (`config.py`, `.pth`, `scalars.json` present).
-2. Computes git SHA of **this** repo and refuses if dirty (`--allow-dirty` to override).
-3. Builds a staging dir matching the HF layout (Section 3).
-4. Generates `metrics.json` from `scalars.json` + optional eval pkl.
-5. Generates `README.md` (model card) from a Jinja template + provenance.
-6. `huggingface_hub.HfApi().upload_folder(...)` to the repo.
-7. Creates a git tag on the HF repo (`create_tag`).
-8. Prints the public URL.
+1. Validates the experiment dir: top-level training `*.py` config, `summary.json`, and the chosen `.pth`.
+2. Records git SHA of **this** code repo; refuses if unknown/dirty (use `--allow-dirty` to override).
+3. Optionally re-runs deploy (`--auto-deploy`) and checks **drift** between the `.pth` and `onnx/` (Section 6.1).
+4. Builds a staging dir matching the HF layout (Section 3): `config.py`, `summary.json`, `pytorch/best.pth`, `onnx/`, `README.md`, `metrics.json` (+ optional `samples/`).
+5. `HfApi().create_repo` (private by default) + `upload_folder` + `create_tag` on the Hub.
+6. Writes `work_dirs/<exp>/release.json` with provenance, prints `https://huggingface.co/.../tree/<tag>`.
 
 ### Stage E: Consume (downstream / production)
 
@@ -291,15 +289,17 @@ pred = SegPredictor(
 
 ## 5. Repo changes required
 
-### 5.1 New files
+### 5.1 New files (implemented)
 
 ```
 docs/mlops.md                            ← this document
-tools/release.py                         ← promote work_dir → HF repo
-tools/release/                           ← (optional) supporting modules
-    ├── card_template.md.j2              ← Jinja template for model card
-    ├── metrics.py                       ← scalars.json → metrics.json
-    └── validate.py                      ← lint experiment before push
+tools/release.py                         ← promote work_dir → HF repo (CLI)
+tools/hf_release/                        ← release helpers
+    ├── validate.py                      ← experiment + drift checks
+    ├── auto_deploy.py                 ← re-run `tools/deploy/deploy.py` (optional)
+    ├── staging.py                     ← build HF model-repo layout
+    ├── metrics.py                     ← `summary.json` (+ optional pkl) → `metrics.json`
+    └── card.py                        ← `README.md` (model card) as hand-rolled template
 ```
 
 ### 5.2 Modified files
@@ -318,52 +318,48 @@ tools/release/                           ← (optional) supporting modules
 
 ---
 
-## 6. `tools/release.py` — interface sketch
+## 6. `tools/release.py` — interface (implemented)
 
-```python
-# tools/release.py
-"""
-Promote a local work_dirs/ experiment to a Hugging Face Hub repo as a tagged release.
+Install the optional extra: `pip install -e ".[release]"` (adds `huggingface_hub`).
 
-Usage:
-    python tools/release.py \
-        --exp-dir work_dirs/<exp> \
-        --pth     <ckpt_filename_inside_exp_dir> \
-        --repo-id <org>/<repo> \
-        --tag     v1.1 \
-        [--deploy work_dirs/<exp>/deploy/onnx] \
-        [--metrics work_dirs/<exp>/eval_results.json] \
-        [--samples assets/image/sample.jpg]  \
-        [--message "Release notes"] \
-        [--dry-run] [--allow-dirty] [--private]
-"""
+**Minimum (PyTorch + config + `summary.json` + metrics + model card):**
+
+```bash
+python tools/release.py \
+    --exp-dir work_dirs/<exp> \
+    --pth     <ckpt_filename_inside_exp_dir> \
+    --repo-id <org>/mts-... \
+    --tag     v1.0.0 \
+    --message "Release notes" \
+    [--allow-dirty]
 ```
 
-Steps (pseudocode):
+Hugging Face auth uses the normal `huggingface_hub` flow (`HF_TOKEN` or `huggingface-cli login`). New repos are **private** by default; pass `--public` for a public model repo.
 
-```python
-def main(args):
-    validate_experiment(args.exp_dir, args.pth)
-    git_sha = check_git_clean(allow_dirty=args.allow_dirty)
+**With ONNX** (after a local `tools/deploy/deploy.py` run): pass `--deploy` to the directory that contains `end2end.onnx` (e.g. `work_dirs/<exp>/deploy/onnx`).
 
-    staging = build_staging_dir(args)        # copies into HF layout
-    write_metrics_json(staging, args)
-    render_model_card(staging, args, git_sha)
+**Auto-re-export** if the checkpoint is newer than the ONNX (or ONNX is missing): add `--auto-deploy` and also:
 
-    if args.dry_run:
-        print(f"[dry-run] would upload {staging} to {args.repo_id}@{args.tag}")
-        return
+- `--deploy-cfg` — mmdeploy deploy config (e.g. `configs/deploy/...py`)
+- `--deploy-sample` — an input image for export tracing
+- If `--deploy` is omitted, it defaults to `<exp-dir>/deploy/onnx`.
 
-    api = HfApi()
-    api.create_repo(args.repo_id, private=args.private, exist_ok=True)
-    api.upload_folder(
-        repo_id=args.repo_id,
-        folder_path=staging,
-        commit_message=f"{args.tag}: {args.message}",
-    )
-    api.create_tag(args.repo_id, tag=args.tag, tag_message=args.message)
-    print(f"https://huggingface.co/{args.repo_id}/tree/{args.tag}")
-```
+**Other flags:**
+
+- `--model-cfg` — defaults to the first `*.py` in `--exp-dir` (same as the summarizer)
+- `--metrics-pkl` — optional eval pickle; merged into `metrics.json` as `eval_extra` (shallow, JSON-safe)
+- `--samples-in` + `--samples-out` — copy demo images to `samples/input.jpg` and `samples/output.png`
+- `--dry-run` — build the release tree in a temp dir and list files; no Hub call (no `huggingface_hub` required)
+
+**Exit codes:** `0` success, `2` validation (missing files, git policy), `3` deploy subprocess or Hugging Face API error.
+
+**Local provenance after a real upload:** `work_dirs/<exp>/release.json` (repo, tag, pth, git sha, has_onnx, time).
+
+### 6.1 Drift safety (`.pth` vs ONNX)
+
+If `--deploy` is set, the tool requires `end2end.onnx` and **fails** if the checkpoint is **newer** than the ONNX (mtime), with a one-line hint to re-run `tools/deploy/deploy.py`. This keeps published `onnx/` aligned with `pytorch/best.pth` on the same tag.
+
+`detail.json` is checked best-effort: if the checkpoint name does not appear, a **warning** is logged (mmdeploy’s schema can vary by version). Re-run deploy when in doubt.
 
 ---
 
@@ -407,8 +403,8 @@ end2end.onnx  →  detail.json  →  pth filename + config path
 | Step | Action | Owner |
 |---|---|---|
 | 1 | Create empty HF repos for each existing model variant | Maintainer |
-| 2 | Add `huggingface_hub` to `pyproject.toml` `[release]` extra | Dev |
-| 3 | Implement `tools/release.py` (this doc) | Dev |
+| 2 | `huggingface_hub` on optional `[release]` extra in `pyproject.toml` (done) | Dev |
+| 3 | `tools/release.py` + `tools/hf_release/` (done) | Dev |
 | 4 | Dry-run release on one current experiment | Dev |
 | 5 | Promote first real release (`v1.0`) | Maintainer |
 | 6 | Update `README.md` with "Loading from HF" snippet | Dev |
