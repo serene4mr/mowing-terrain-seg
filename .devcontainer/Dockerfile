@@ -1,7 +1,7 @@
 # Dev layer: non-root user on top of the base image (mowing-seg:base).
 # Build the base first:  docker build -t mowing-seg:base -f docker/Dockerfile .
 
-ARG BASE_IMAGE=ghcr.io/serene/mowing-terrain-seg:base
+ARG BASE_IMAGE=ghcr.io/serene4mr/mowing-terrain-seg:latest
 FROM ${BASE_IMAGE}
 
 ARG USERNAME
