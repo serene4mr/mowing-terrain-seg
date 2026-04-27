@@ -1,6 +1,14 @@
 # Default runtime configuration
 # Based on MMSegmentation standard runtime settings
 
+# Ensures mowing_terrain_seg (FixedCrossEntropyLoss, custom datasets, etc.)
+# is registered in every subprocess that loads this config — including the
+# mmdeploy ONNX export subprocess.
+custom_imports = dict(
+    imports=['mowing_terrain_seg'],
+    allow_failed_imports=False,
+)
+
 default_scope = 'mmseg'
 env_cfg = dict(
     cudnn_benchmark=True,
