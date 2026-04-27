@@ -217,7 +217,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         extra_trt.append("--int8")
     # fp32: no extra flag
 
-    shapes_arg = f"input:{','.join(str(x) for x in shape)}"
+    # TensorRT trtexec expects dimensions in NxCxHxW with "x" separators,
+    # e.g. --shapes=input:1x3x1024x544 (commas are parsed as multi-input separators).
+    shapes_arg = f"input:{'x'.join(str(x) for x in shape)}"
     cmd: List[str] = [
         str(trtexec),
         f"--onnx={onnx_path}",
