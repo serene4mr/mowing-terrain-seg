@@ -8,9 +8,14 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from tools.summarize_experiment import find_root_config_py
+
+try:
+    from huggingface_hub import hf_hub_download as hf_hub_download_file  # type: ignore[import-not-found]
+except ImportError:
+    hf_hub_download_file = None  # type: ignore[misc, assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -171,3 +176,107 @@ def deploy_drift(
         pth,
         _deploy_hint(),
     )
+
+
+def _sha256_file(path: Path, chunk: int = 1024 * 1024) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(chunk)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+def validate_engine_against_hub(
+    engine_dir: Path,
+    *,
+    repo_id: Optional[str] = None,
+    allow_dirty: bool = False,
+    _exit: bool = True,
+) -> Dict[str, Any]:
+    """Compare ``platform.json`` source ONNX hash to the file on the Hub.
+
+    Downloads ``onnx/end2end.onnx`` for the recorded revision and compares
+    SHA-256. Skips download when ``allow_dirty`` is True.
+    """
+    d = engine_dir.resolve()
+    plat_path = d / "platform.json"
+    if not plat_path.is_file():
+        msg = f"Missing {plat_path}"
+        if _exit:
+            print(msg, file=sys.stderr)
+            raise SystemExit(2)
+        raise ValueError(msg)
+    try:
+        raw: Dict[str, Any] = json.loads(
+            plat_path.read_text(encoding="utf-8", errors="replace")
+        )
+    except json.JSONDecodeError as e:
+        msg = f"Invalid JSON in {plat_path}: {e}"
+        if _exit:
+            print(msg, file=sys.stderr)
+            raise SystemExit(2)
+        raise ValueError(msg) from e
+    src = raw.get("source")
+    if not isinstance(src, dict):
+        msg = "platform.json missing 'source' object"
+        if _exit:
+            print(msg, file=sys.stderr)
+            raise SystemExit(2)
+        raise ValueError(msg)
+    hub_repo = src.get("onnx_repo")
+    rev = src.get("onnx_revision")
+    expect_sha = src.get("onnx_sha256")
+    hub_path = src.get("onnx_path", "onnx/end2end.onnx")
+    if not hub_repo or not rev or not expect_sha:
+        msg = "platform.json source must include onnx_repo, onnx_revision, onnx_sha256"
+        if _exit:
+            print(msg, file=sys.stderr)
+            raise SystemExit(2)
+        raise ValueError(msg)
+    if repo_id and str(hub_repo) != str(repo_id):
+        msg = (
+            f"--repo-id {repo_id!r} does not match platform.json source.onnx_repo "
+            f"{hub_repo!r}"
+        )
+        if _exit:
+            print(msg, file=sys.stderr)
+            raise SystemExit(2)
+        raise ValueError(msg)
+    if allow_dirty:
+        return raw
+    if hf_hub_download_file is None:
+        msg = "huggingface_hub is not installed. Install: pip install -e '.[release]'"
+        if _exit:
+            print(msg, file=sys.stderr)
+            raise SystemExit(2)
+        raise ValueError(msg)
+    try:
+        local = hf_hub_download_file(
+            repo_id=str(hub_repo),
+            filename=str(hub_path),
+            revision=str(rev),
+        )
+    except Exception as e:  # noqa: BLE001
+        msg = f"Failed to download {hub_path} from {hub_repo}@{rev}: {e}"
+        if _exit:
+            print(msg, file=sys.stderr)
+            raise SystemExit(2) from e
+        raise ValueError(msg) from e
+    got = _sha256_file(Path(local))
+    if got != str(expect_sha):
+        msg = (
+            "ONNX on Hub does not match engine build provenance (SHA-256 drift).\n"
+            f"  expected (platform.json): {expect_sha}\n"
+            f"  got (Hub file):         {got}\n"
+            "Rebuild the engine on Jetson from the current Hub ONNX, or use --allow-dirty."
+        )
+        if _exit:
+            print(msg, file=sys.stderr)
+            raise SystemExit(2)
+        raise ValueError(msg)
+    return raw

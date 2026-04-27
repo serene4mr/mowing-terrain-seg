@@ -13,6 +13,7 @@ import pytest
 
 from tools.hf_release import card, metrics, staging
 from tools.hf_release import validate as v
+import hashlib
 
 FIXTURE = (
     Path(__file__).resolve().parent.parent
@@ -400,3 +401,101 @@ def test_release_json_written_to_exp_dir(
     assert j["pth"] == "iter_300.pth"
     assert "git_sha" in j
     assert "released_at" in j
+
+
+def _sha(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+def test_merge_tensorrt_readme_inserts_section() -> None:
+    plat = {
+        "profile": "p1",
+        "build": {"precision": "fp16", "build_date": "2026-01-01T00:00:00Z"},
+        "software": {"tensorrt_python": "10.4.0", "cuda_cudart": "12.6.77-1"},
+    }
+    out = card.merge_tensorrt_engines_readme("# Model\n", plat)
+    assert "## Available TensorRT engines" in out
+    assert "p1" in out
+    assert "10.4.0" in out
+
+
+def test_release_engine_dir_dry_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    import tools.release
+
+    eng = tmp_path / "eng"
+    eng.mkdir()
+    onnx_sha = _sha(b"onnx")
+    (eng / "end2end.engine").write_bytes(b"E")
+    plat = {
+        "schema_version": "1.0",
+        "profile": "orin-test",
+        "source": {
+            "onnx_repo": "u/m",
+            "onnx_revision": "v1",
+            "onnx_sha256": onnx_sha,
+            "onnx_path": "onnx/end2end.onnx",
+        },
+        "build": {"precision": "fp16", "build_date": "x"},
+        "software": {"tensorrt_python": "10.4.0", "cuda_cudart": "12.6"},
+    }
+    (eng / "platform.json").write_text(json.dumps(plat), encoding="utf-8")
+
+    def _v(*a, **k):  # type: ignore[no-untyped-def]
+        return plat
+
+    monkeypatch.setattr(
+        "tools.release.validate.validate_engine_against_hub",
+        _v,
+    )
+    monkeypatch.setattr(
+        "tools.release._fetch_readme_from_hub",
+        lambda *a, **k: "# head\n",
+    )
+
+    rc = tools.release.main(
+        [
+            "--engine-dir",
+            str(eng),
+            "--repo-id",
+            "u/m",
+            "--tag",
+            "v1",
+            "--dry-run",
+            "--allow-dirty",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "tensorrt" in out and "orin-test" in out
+
+
+def test_validate_engine_against_hub_mismatch_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    eng = tmp_path / "e"
+    eng.mkdir()
+    expect = _sha(b"onnxdata")
+    plat = {
+        "source": {
+            "onnx_repo": "a/b",
+            "onnx_revision": "t",
+            "onnx_sha256": expect,
+            "onnx_path": "onnx/end2end.onnx",
+        }
+    }
+    (eng / "platform.json").write_text(json.dumps(plat), encoding="utf-8")
+
+    def fake_download(**k):  # type: ignore[no-untyped-def]
+        p = tmp_path / "hub.onnx"
+        p.write_bytes(b"other-bytes")
+        return str(p)
+
+    monkeypatch.setattr(
+        "tools.hf_release.validate.hf_hub_download_file",
+        fake_download,
+    )
+    with pytest.raises(SystemExit) as e:
+        v.validate_engine_against_hub(eng, repo_id="a/b", allow_dirty=False)
+    assert e.value.code == 2

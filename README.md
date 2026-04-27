@@ -170,6 +170,10 @@ python tools/deploy/deploy.py \
 > Mask2Former checkpoint raises `RuntimeError: NYI: Named tensors are not supported with the tracer`.
 > See [docs/deploy.md](docs/deploy.md) for the full explanation and fix.
 
+**Jetson / TensorRT:** after ONNX is on Hugging Face Hub, build an engine on-device with
+`tools/build_engine.py` and upload with `tools/release.py --engine-dir`. See
+[docs/deploy.md § Building TensorRT engines for Jetson Orin NX](docs/deploy.md#building-tensorrt-engines-for-jetson-orin-nx).
+
 ## Project Structure
 
 ```

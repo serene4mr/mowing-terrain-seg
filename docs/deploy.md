@@ -130,6 +130,118 @@ python tools/deploy/deploy.py \
 
 ---
 
+## Building TensorRT engines for Jetson Orin NX
+
+After you have published **ONNX** to Hugging Face Hub (`tools/release.py` with
+`--deploy`), build a **device-specific** TensorRT engine on the Jetson itself.
+Engines are **not portable** across GPU architectures; ONNX is the portable
+contract.
+
+### Prerequisites
+
+- Jetson with TensorRT and `trtexec` (typical path: `/usr/src/tensorrt/bin/trtexec`).
+- Docker: run with **`--runtime nvidia`** so TensorRT and NVDLA libraries from
+  the host are visible. If `import tensorrt` fails with
+  `libnvdla_compiler.so: cannot open shared object file`, you forgot
+  `--runtime nvidia`.
+- Hugging Face token: `HF_TOKEN` or `huggingface-cli login` (for pull/push).
+- `pip install -e ".[release]"` or `pip install -e ".[deploy-trt]"` on the
+  Jetson **or** use the project Dockerfile below.
+
+### Optional: lean deploy image
+
+From the **repository root** (so `tools/` and `requirements-deploy.txt` exist):
+
+```bash
+docker build -f docker/deploy-jetson.Dockerfile -t mts-deploy-jetson .
+docker run --rm -it --runtime nvidia -v "$PWD":/workspace -w /workspace -e PYTHONPATH=/workspace mts-deploy-jetson
+```
+
+Use `python3 tools/build_engine.py ...` from `/workspace` (repo root). The
+Dockerfile sets `PYTHONPATH=/workspace` for the **baked-in** copy; when you bind-mount
+the live repo, pass `-e PYTHONPATH=/workspace` as above.
+
+### 1) Build the engine (on Orin)
+
+Pulls `onnx/*` (and a few other files) from the Hub, runs `trtexec`, writes
+`end2end.engine`, `platform.json`, and `build.log`.
+
+```bash
+python tools/build_engine.py \
+  --repo-id <org>/<model-repo> \
+  --revision v1.0.0 \
+  --output-dir work_dirs/trt/orin/v1.0.0 \
+  --precision fp16
+```
+
+- **Profile** (folder name) is **auto-detected** from the board, memory, JetPack
+  guess, and TensorRT Python version, unless you pass `--profile my-name`.
+- **Static shapes** default to `1,3,1024,544` (`--input-shape`).
+- **Local ONNX** (no Hub): `--no-pull --onnx /path/to/end2end.onnx` (still
+  records provenance in `platform.json`).
+
+`platform.json` includes `source.onnx_sha256` and `source.onnx_revision` so a
+later upload can verify the engine matches the ONNX on the Hub.
+
+**Dry run** (print `trtexec` command, no build):
+
+```bash
+python tools/build_engine.py ... --output-dir /tmp/x --dry-run
+```
+
+### 2) Upload the engine to the same Hub repo
+
+Appends `tensorrt/<profile>/` and merges a **“Available TensorRT engines”** table
+into `README.md`.
+
+```bash
+python tools/release.py \
+  --engine-dir work_dirs/trt/orin/v1.0.0 \
+  --repo-id <org>/<model-repo> \
+  --tag v1.0.0 \
+  --message "Orin TRT" \
+  --allow-dirty
+```
+
+- **`--allow-dirty`**: also skips the **ONNX hash check** (Hub download vs
+  `platform.json`). Omit it in CI/production so drift is caught.
+- **`--profile`**: override the Hub subfolder name; `platform.json` in the
+  upload is updated to match.
+- Provenance is written to `hf_engine_release.json` inside `--engine-dir`.
+
+### Hub layout
+
+```
+<repo>/
+  onnx/
+    end2end.onnx
+    pipeline.json
+    detail.json
+  tensorrt/
+    <auto-profile>/
+      end2end.engine
+      platform.json
+      build.log
+  README.md   # table of TensorRT profiles merged by release
+```
+
+### `platform.json` (schema v1.0, summary)
+
+- `schema_version`, `profile`
+- `device`: `board_model`, `memory_gb`, `sm_capability`, `power_mode` (when detectable)
+- `software`: `l4t`, `jetpack`, `tensorrt_python`, `cuda_cudart`, `cudnn`, …
+- `image` (optional): `ref` / `digest` if you pass `--docker-image-ref`
+- `build`: `precision`, `workspace_mb`, `input_shape`, `trtexec_args`, `duration_sec`, `build_date`
+- `source`: `onnx_repo`, `onnx_revision`, `onnx_sha256`, `onnx_path`
+
+### Why not `tools/deploy/deploy.py` for TRT on Jetson?
+
+`deploy.py` is mmdeploy-centric and expects a full PyTorch + mmcv stack. On
+Jetson, **trtexec** (or the TensorRT API) from the L4T/JetPack image is the
+lean path. ONNX from the Hub is the input; the engine is output.
+
+---
+
 ## Adding new ONNX op rewrites (post-export)
 
 After export, `tools/deploy/deploy.py` automatically rewrites non-standard

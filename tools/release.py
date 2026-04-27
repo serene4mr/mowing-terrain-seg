@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 import tempfile
@@ -16,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.hf_release import card, metrics, staging, validate  # noqa: E402
+from tools.hf_release import card, engine, metrics, staging, validate  # noqa: E402
 
 
 def _print_staging_tree(path: Path) -> None:
@@ -26,7 +27,10 @@ def _print_staging_tree(path: Path) -> None:
 
 
 def _write_release_json(
-    exp_dir: Path, args: argparse.Namespace, git_sha: str, has_onnx: bool
+    exp_dir: Path,
+    args: argparse.Namespace,
+    git_sha: str,
+    has_onnx: bool,
 ) -> Path:
     rel = {
         "repo_id": args.repo_id,
@@ -42,17 +46,61 @@ def _write_release_json(
     return out
 
 
+def _write_engine_release_json(
+    engine_dir: Path, args: argparse.Namespace, git_sha: str, profile: str
+) -> Path:
+    rel = {
+        "repo_id": args.repo_id,
+        "tag": args.tag,
+        "git_sha": git_sha,
+        "released_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "engine_only": True,
+        "engine_profile": profile,
+    }
+    out = engine_dir / "hf_engine_release.json"
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(rel, f, indent=2, sort_keys=True)
+    return out
+
+
+def _hf_import():
+    try:
+        from huggingface_hub import HfApi  # type: ignore[import-not-found]
+    except ImportError as e:
+        print(
+            "huggingface_hub is not installed. Install: pip install -e '.[release]'",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from e
+    return HfApi
+
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Release experiment artifacts to Hugging Face Hub (tag = version)."
+        description="Release experiment artifacts to Hugging Face Hub (tag = version).",
     )
     p.add_argument(
-        "--exp-dir", required=True, type=Path, help="Experiment work_dir (mmengine work_dir)"
+        "--exp-dir",
+        type=Path,
+        default=None,
+        help="Experiment work_dir (mmengine work_dir). Not used with --engine-dir.",
     )
     p.add_argument(
         "--pth",
-        required=True,
+        default=None,
         help="Checkpoint file name inside --exp-dir (e.g. best_val_mIoU_iter_5000.pth).",
+    )
+    p.add_argument(
+        "--engine-dir",
+        type=Path,
+        default=None,
+        help="Output dir from tools/build_engine.py (end2end.engine + platform.json). "
+        "Mutually exclusive with --exp-dir (TensorRT engine-only upload).",
+    )
+    p.add_argument(
+        "--profile",
+        default=None,
+        help="Override TensorRT profile subfolder name (default: from platform.json).",
     )
     p.add_argument(
         "--repo-id",
@@ -62,7 +110,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument(
         "--tag",
         required=True,
-        help="Git tag on the Hub repo, e.g. v1.0.0",
+        help="Hub revision to upload to (branch, tag, or commit), e.g. v1.0.0 or main",
     )
     p.add_argument(
         "--message",
@@ -104,7 +152,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument(
         "--allow-dirty",
         action="store_true",
-        help="Allow dirty git or missing .git in the code checkout",
+        help="Allow dirty git or missing .git in the code checkout; "
+        "for --engine-dir, skip Hub ONNX↔provenance hash check",
     )
     p.add_argument(
         "--public",
@@ -114,9 +163,94 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    args = parse_args(argv)
-    exp_dir = args.exp_dir.resolve()
+def _fetch_readme_from_hub(repo_id: str, tag: str) -> str:
+    try:
+        from huggingface_hub import hf_hub_download  # type: ignore[import-not-found]
+    except ImportError:
+        return ""
+    try:
+        p = hf_hub_download(
+            repo_id=repo_id,
+            filename="README.md",
+            revision=tag,
+        )
+        return Path(p).read_text(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def main_engine(args: argparse.Namespace) -> int:
+    engine_dir: Path = args.engine_dir.resolve()  # type: ignore[union-attr]
+    try:
+        plat_data: Dict[str, Any] = validate.validate_engine_against_hub(
+            engine_dir,
+            repo_id=args.repo_id,
+            allow_dirty=args.allow_dirty,
+        )
+    except SystemExit as e:
+        return int(e.code) if isinstance(e.code, int) else 2
+    try:
+        git_sha, _ = validate.check_git(REPO_ROOT, args.allow_dirty)
+    except SystemExit as e:
+        return int(e.code) if isinstance(e.code, int) else 2
+
+    profile = args.profile or plat_data.get("profile")
+    if not profile or not isinstance(profile, str):
+        print("Could not determine profile; set --profile or fix platform.json", file=sys.stderr)
+        return 2
+
+    plat_merged: Dict[str, Any] = copy.deepcopy(plat_data)
+    if args.profile:
+        plat_merged["profile"] = args.profile
+
+    readme_in = _fetch_readme_from_hub(args.repo_id, args.tag)
+    try:
+        merged_readme = card.merge_tensorrt_engines_readme(readme_in, plat_merged)
+    except (OSError, ValueError) as e:
+        print(f"Model card merge failed: {e}", file=sys.stderr)
+        return 2
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp)
+            _root, pdir = engine.build_engine_staging(
+                engine_dir=engine_dir,
+                dest=dest,
+                profile=profile,
+            )
+            if args.profile:
+                (pdir / "platform.json").write_text(
+                    json.dumps(plat_merged, indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+            (dest / "README.md").write_text(merged_readme, encoding="utf-8")
+
+            if args.dry_run:
+                _print_staging_tree(dest)
+                return 0
+            HfApi = _hf_import()  # noqa: N806
+            try:
+                api = HfApi()
+                api.create_repo(args.repo_id, private=not args.public, exist_ok=True)
+                api.upload_folder(
+                    repo_id=args.repo_id,
+                    folder_path=str(dest),
+                    commit_message=f"{args.tag}: TensorRT {profile} — {args.message or 'engine'}",
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"Hugging Face API error: {e}", file=sys.stderr)
+                return 3
+    except (OSError, ValueError) as e:
+        print(f"Staging failed: {e}", file=sys.stderr)
+        return 2
+
+    _write_engine_release_json(engine_dir, args, git_sha, profile=profile)
+    print(f"https://huggingface.co/{args.repo_id}/tree/{args.tag}")
+    return 0
+
+
+def main_experiment(args: argparse.Namespace) -> int:
+    exp_dir = args.exp_dir.resolve()  # type: ignore[union-attr]
     deploy: Optional[Path] = Path(args.deploy).resolve() if args.deploy else None
 
     if (args.samples_in is None) ^ (args.samples_out is None):
@@ -126,7 +260,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 2
 
-    pth = validate.validate_experiment(exp_dir, args.pth)
+    pth = validate.validate_experiment(exp_dir, args.pth)  # type: ignore[arg-type]
     with open(exp_dir / "summary.json", "r", encoding="utf-8", errors="replace") as f:
         summary: Dict[str, Any] = json.load(f)
 
@@ -166,17 +300,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.dry_run:
                 _print_staging_tree(dest)
                 return 0
-
-            try:
-                from huggingface_hub import (  # type: ignore[import-not-found]  # noqa: WPS433
-                    HfApi,
-                )
-            except ImportError:
-                print(
-                    "huggingface_hub is not installed. Install: pip install -e '.[release]'",
-                    file=sys.stderr,
-                )
-                return 2
+            HfApi = _hf_import()  # noqa: N806
             try:
                 api = HfApi()
                 api.create_repo(args.repo_id, private=not args.public, exist_ok=True)
@@ -201,6 +325,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     _write_release_json(exp_dir, args, git_sha, has_onnx=has_onnx_in_release)
     print(f"https://huggingface.co/{args.repo_id}/tree/{args.tag}")
     return 0
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = parse_args(argv)
+    eng = args.engine_dir
+    exp = args.exp_dir
+    pth = args.pth
+    if eng is not None and (exp is not None or pth is not None):
+        print("Use either --engine-dir or (--exp-dir and --pth), not both.", file=sys.stderr)
+        return 2
+    if eng is not None:
+        return main_engine(args)
+    if exp is None or pth is None:
+        print(
+            "Standard release requires --exp-dir and --pth, or use --engine-dir for TensorRT.",
+            file=sys.stderr,
+        )
+        return 2
+    return main_experiment(args)
 
 
 if __name__ == "__main__":
