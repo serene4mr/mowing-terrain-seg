@@ -130,6 +130,151 @@ python tools/deploy/deploy.py \
 
 ---
 
+## End-to-end: dev → Hub → Jetson → Hub
+
+The full loop walks four hops:
+
+```mermaid
+flowchart LR
+    dev["Dev (x86 + CUDA GPU)"] -- "release.py (ONNX)" --> hub1["HF Hub: onnx/, pytorch/"]
+    hub1 -- "build_engine.py pulls ONNX" --> orin["Jetson Orin (--runtime nvidia)"]
+    orin -- "trtexec produces engine" --> orin2["end2end.engine + platform.json"]
+    orin2 -- "release.py --engine-dir" --> hub2["HF Hub: tensorrt/PROFILE/"]
+```
+
+### Step 0 — Authenticate (once per machine)
+
+On **dev** and **Jetson**:
+
+```bash
+huggingface-cli login          # or: export HF_TOKEN=hf_...
+```
+
+The token needs **write** access to the model repo on both machines (push
+ONNX from dev, push engine from Jetson).
+
+### Step 1 — On dev: train, export, release ONNX
+
+(Detailed in [`docs/mlops.md`](mlops.md) §4, summarized here.)
+
+```bash
+# Train (writes work_dirs/<exp>/summary.json + best_*.pth)
+python tools/train.py configs/train/.../my_model.py --work-dir work_dirs/my_exp
+
+# Export ONNX with mmdeploy (writes work_dirs/my_exp/deploy/onnx/end2end.onnx)
+python tools/deploy/deploy.py \
+  configs/deploy/custom/segmentation_onnxruntime_dynamic.py \
+  configs/train/.../my_model.py \
+  work_dirs/my_exp/best_val_mIoU_iter_25000.pth \
+  assets/image/test1/rgb/frame_001218_rgb.png \
+  --work-dir work_dirs/my_exp/deploy/onnx --dump-info
+
+# Release model + ONNX to HF Hub at tag v1.0.0
+python tools/release.py \
+  --exp-dir work_dirs/my_exp \
+  --pth best_val_mIoU_iter_25000.pth \
+  --deploy work_dirs/my_exp/deploy/onnx \
+  --repo-id <org>/<model-repo> \
+  --tag v1.0.0 \
+  --message "Initial release"
+```
+
+After this, the Hub repo at `<org>/<model-repo>@v1.0.0` has
+`onnx/end2end.onnx`, `pytorch/best.pth`, `summary.json`, and `README.md`.
+
+### Step 2 — On Jetson: pull ONNX, build engine
+
+Inside the deploy container (or on the host with `pip install -e ".[deploy-trt]"`):
+
+```bash
+docker run --rm -it --runtime nvidia \
+  -v "$PWD":/workspace -w /workspace -e PYTHONPATH=/workspace \
+  -e HF_TOKEN=$HF_TOKEN \
+  mts-deploy-jetson bash
+
+# inside container:
+python3 tools/build_engine.py \
+  --repo-id <org>/<model-repo> \
+  --revision v1.0.0 \
+  --output-dir work_dirs/trt/v1.0.0 \
+  --precision fp16
+```
+
+Produces:
+
+```
+work_dirs/trt/v1.0.0/
+  end2end.engine        # device-specific
+  platform.json         # records source.onnx_sha256, jetpack, trt, ...
+  build.log
+  source/end2end.onnx   # copy used as the build input (for SHA reference)
+```
+
+Profile name (e.g. `orin-nx-16gb-jp6.2-fp16-trt10.4`) is auto-detected.
+
+### Step 3 — On Jetson: push engine back to the same Hub repo
+
+```bash
+python3 tools/release.py \
+  --engine-dir work_dirs/trt/v1.0.0 \
+  --repo-id <org>/<model-repo> \
+  --tag v1.0.0 \
+  --message "Orin NX TensorRT (fp16)"
+```
+
+What this does:
+
+1. Reads `platform.json` from `--engine-dir`.
+2. **Drift check** — downloads `onnx/end2end.onnx` from the Hub at the
+   recorded `source.onnx_revision`, computes SHA-256, and compares against
+   `source.onnx_sha256`. If they differ, exits with code `2`. Use
+   `--allow-dirty` only when you knowingly want to skip this check.
+3. Stages the engine into `tensorrt/<profile>/`.
+4. Fetches the current `README.md` and merges/inserts a **“Available
+   TensorRT engines”** table row.
+5. Uploads the staged folder to the same Hub repo (no new git tag — the
+   commit lands on the existing branch/tag).
+6. Writes `hf_engine_release.json` next to the engine for local provenance.
+
+Final Hub layout:
+
+```
+<org>/<model-repo>@v1.0.0/
+├── README.md                    ← table now lists the new profile
+├── config.py
+├── summary.json
+├── pytorch/best.pth
+├── onnx/end2end.onnx
+└── tensorrt/orin-nx-16gb-jp6.2-fp16-trt10.4/
+    ├── end2end.engine
+    ├── platform.json
+    └── build.log
+```
+
+### Step 4 — On any consumer (Jetson with same profile, or another Orin):
+
+```python
+from huggingface_hub import hf_hub_download
+engine = hf_hub_download(
+    "<org>/<model-repo>",
+    filename="tensorrt/orin-nx-16gb-jp6.2-fp16-trt10.4/end2end.engine",
+    revision="v1.0.0",
+)
+# Load with TensorRT runtime (separate inference glue; see roadmap below)
+```
+
+### Common pitfalls
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `RuntimeError: ONNX on Hub does not match engine build provenance (SHA-256 drift)` | Hub ONNX changed since the engine was built | Re-run **Step 2** to rebuild on current ONNX, then Step 3 |
+| `libnvdla_compiler.so: cannot open shared object file` | `docker run` missing `--runtime nvidia` | Add `--runtime nvidia` |
+| `huggingface_hub is not installed` | Lean Jetson env missing the dep | `pip install -e ".[deploy-trt]"` or rebuild the deploy image |
+| `trtexec not found at /usr/src/tensorrt/bin/trtexec` | Non-Jetson container or trtexec moved | Set `TRTEXEC=/path/to/trtexec` env var |
+| Validation downloads a different ONNX than expected | Wrong `--revision` on build | Match `--revision` to the same tag you'll release to |
+
+---
+
 ## Building TensorRT engines for Jetson Orin NX
 
 After you have published **ONNX** to Hugging Face Hub (`tools/release.py` with

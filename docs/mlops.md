@@ -320,6 +320,14 @@ pred = SegPredictor(
 
 `huggingface_hub` caches under `~/.cache/huggingface/hub/` — no extra logic needed.
 
+### Stage F: Jetson TensorRT engine (optional, push-back loop)
+
+For Jetson / edge targets the engine must be built **on-device** and pushed
+back to the same Hub repo under `tensorrt/<profile>/`.  See the full
+end-to-end walkthrough — including the dev → Hub → Jetson → Hub loop
+diagram and copy-paste commands — in
+[`docs/deploy.md` § End-to-end: dev → Hub → Jetson → Hub](deploy.md#end-to-end-dev--hub--jetson--hub).
+
 ---
 
 ## 5. Repo changes required

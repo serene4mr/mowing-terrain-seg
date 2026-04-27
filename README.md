@@ -171,8 +171,9 @@ python tools/deploy/deploy.py \
 > See [docs/deploy.md](docs/deploy.md) for the full explanation and fix.
 
 **Jetson / TensorRT:** after ONNX is on Hugging Face Hub, build an engine on-device with
-`tools/build_engine.py` and upload with `tools/release.py --engine-dir`. See
-[docs/deploy.md § Building TensorRT engines for Jetson Orin NX](docs/deploy.md#building-tensorrt-engines-for-jetson-orin-nx).
+`tools/build_engine.py` and upload with `tools/release.py --engine-dir`. The full **dev → Hub → Jetson → Hub** end-to-end walkthrough lives at
+[docs/deploy.md § End-to-end: dev → Hub → Jetson → Hub](docs/deploy.md#end-to-end-dev--hub--jetson--hub),
+and the per-step Jetson reference is at [docs/deploy.md § Building TensorRT engines for Jetson Orin NX](docs/deploy.md#building-tensorrt-engines-for-jetson-orin-nx).
 
 ## Project Structure
 
