@@ -215,6 +215,13 @@ def test_card_renders_required_yaml_keys(
     assert "library_name: mmsegmentation" in t
     assert "0.42" in t
     assert "mIoU" in t
+    assert "## Provenance" in t
+    assert "## Classes" in t
+    assert "## Files" in t
+    assert "## Inference" in t
+    assert "Usage (PyTorch)" not in t
+    assert "Usage (ONNX / ONNX Runtime)" not in t
+    assert "SegPredictor" not in t
 
 
 def test_metrics_json_from_summary_only(

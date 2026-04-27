@@ -1,5 +1,5 @@
 _base_ = [
-    '../runtime.py', 
+    '../../_base_/default_runtime.py', 
     '../../_base_/datasets/ycor-lm-3cls.py']
 
 crop_size = (1024, 544) 

@@ -75,6 +75,11 @@ def render(
         dict
     ) and "type" in ds:
         dstype = str(ds.get("type", "ycor"))
+    onnx_note = (
+        "ONNX bundle is included under ``onnx/``."
+        if has_onnx
+        else "This tag does not include an ``onnx/`` directory."
+    )
     front = f"""---
 license: apache-2.0
 library_name: mmsegmentation
@@ -112,61 +117,13 @@ model-index:
 ## Classes
 {_classes_str(summary)}
 
-## Usage (PyTorch)
+## Inference
+Inference examples are maintained in the project docs and `mowing_terrain_seg.inference`.
 
-This tag was produced with **mowing-terrain-seg**. Install that repo, register
-custom modules, then load ``config.py`` and ``pytorch/best.pth`` from this Hub
-revision.
-
-```python
-from huggingface_hub import hf_hub_download
-import mowing_terrain_seg
-from mowing_terrain_seg.inference.predictor import SegPredictor, Backend
-
-mowing_terrain_seg.register_all()
-
-REPO = "{repo_id}"
-REV = "{tag}"
-
-cfg  = hf_hub_download(REPO, "config.py",        revision=REV)
-ckpt = hf_hub_download(REPO, "pytorch/best.pth", revision=REV)
-pred = SegPredictor(cfg_uri=cfg, model_uri=ckpt, backend=Backend.TORCH)
-mask = pred.predict("input.jpg")
-```
+**ONNX:** {onnx_note}
 
 """
-    return front + _onnx_block(
-        repo_id, tag, has_onnx
-    ) + _files_block()
-
-
-def _onnx_block(
-    repo_id: str, tag: str, has_onnx: bool
-) -> str:
-    if not has_onnx:
-        return "\n**ONNX:** This tag does not include an ``onnx/`` directory.\n\n"
-    return f"""
-## Usage (ONNX / ONNX Runtime)
-
-```python
-from huggingface_hub import snapshot_download
-import mowing_terrain_seg
-from mowing_terrain_seg.inference.predictor import SegPredictor, Backend
-
-mowing_terrain_seg.register_all()
-
-REPO = "{repo_id}"
-REV  = "{tag}"
-local = snapshot_download(REPO, revision=REV, allow_patterns=["onnx/*"])
-pred = SegPredictor(
-    cfg_uri=f"{{local}}/onnx/pipeline.json",
-    model_uri=f"{{local}}/onnx/end2end.onnx",
-    backend=Backend.ONNX,
-)
-mask = pred.predict("input.jpg")
-```
-
-"""
+    return front + _files_block()
 
 
 def _files_block() -> str:
