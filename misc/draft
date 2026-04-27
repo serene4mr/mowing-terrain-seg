@@ -25,3 +25,8 @@ print("MMCV:", mmcv.__version__)
 print("MMSeg:", mmseg.__version__)
 print("MMDet:", mmdet.__version__)
 EOF
+
+
+
+
+python -m mlflow ui --backend-store-uri sqlite:///work_dirs/mlflow.db --port 5000 --workers 1

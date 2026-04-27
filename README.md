@@ -156,12 +156,27 @@ python tools/deploy/deploy.py ... --no-rewrite
 
 # Export and show visualization
 python tools/deploy/deploy.py ... --show
+
+# Mask2Former — use the dedicated deploy config (avoids traced-tensor deepcopy crash)
+python tools/deploy/deploy.py \
+    configs/deploy/custom/segmentation_onnxruntime_dynamic_mask2former.py \
+    configs/train/.../mask2former_r50_8xb2-90k_ycor-1024x544.py \
+    work_dirs/my_exp/best.pth \
+    assets/image/sample.jpg \
+    --work-dir work_dirs/my_exp/deploy/onnx
 ```
+
+> **Mask2Former note:** using the generic `segmentation_onnxruntime_dynamic.py` config with a
+> Mask2Former checkpoint raises `RuntimeError: NYI: Named tensors are not supported with the tracer`.
+> See [docs/deploy.md](docs/deploy.md) for the full explanation and fix.
 
 ## Project Structure
 
 ```
 ├── configs/          # Model and dataset configurations
+├── docs/             # Design docs and deployment notes
+│   ├── mlops.md      #   End-to-end MLOps workflow (train → deploy → release)
+│   └── deploy.md     #   ONNX export guide and known issues
 ├── src/              # Custom datasets, models, and utilities
 ├── tools/            # Training and inference scripts
 ├── data/             # Dataset directory (excluded from git)
