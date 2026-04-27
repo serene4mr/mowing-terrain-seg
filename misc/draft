@@ -30,3 +30,11 @@ EOF
 
 
 python -m mlflow ui --backend-store-uri sqlite:///work_dirs/mlflow.db --port 5000 --workers 1
+
+
+python tools/deploy/deploy.py \
+  configs/deploy/custom/segmentation_onnxruntime_dynamic_mask2former.py \
+  configs/train/ycor-lm-3cls-exps-0/mask2former/mask2former_r50_8xb2-90k_ycor-1024x544.py \
+  work_dirs/ycor-lm-3cls-exps-0-ft-from-10k/best_val_mIoU_iter_25000.pth \
+  /workspaces/mowing-terrain-seg/assets/image/test1/rgb/frame_001218_rgb.png \
+  --work-dir work_dirs/ycor-lm-3cls-exps-0-ft-from-10k/deploy/onnx
