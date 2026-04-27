@@ -48,6 +48,30 @@ def _parse_shape(s: str) -> Tuple[int, ...]:
     return tuple(parts)
 
 
+def _onnx_input_has_dynamic_dim(onnx_path: Path, input_name: str = "input") -> bool:
+    """Return True if ONNX input has any dynamic dim (dim_param/unknown)."""
+    try:
+        import onnx  # type: ignore[import-not-found]
+    except ImportError:
+        # Keep previous behavior when onnx is unavailable.
+        return True
+
+    model = onnx.load(str(onnx_path))
+    for inp in model.graph.input:
+        if inp.name != input_name:
+            continue
+        shape = inp.type.tensor_type.shape
+        for dim in shape.dim:
+            # Dynamic if symbolic name exists or fixed value is not set.
+            if getattr(dim, "dim_param", ""):
+                return True
+            if not dim.HasField("dim_value"):
+                return True
+        return False
+    # Unknown input schema -> treat as dynamic to preserve existing behavior.
+    return True
+
+
 def _pull_snapshot(
     repo_id: str,
     revision: str,
@@ -114,6 +138,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=str,
         default="1,3,1024,544",
         help="Static input shape N,C,H,W for trtexec --shapes (comma-separated).",
+    )
+    p.add_argument(
+        "--no-shapes",
+        action="store_true",
+        help="Do not pass --shapes to trtexec (useful for static ONNX exports).",
     )
     p.add_argument(
         "--profile",
@@ -220,13 +249,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # TensorRT trtexec expects dimensions in NxCxHxW with "x" separators,
     # e.g. --shapes=input:1x3x1024x544 (commas are parsed as multi-input separators).
     shapes_arg = f"input:{'x'.join(str(x) for x in shape)}"
+    use_shapes = not args.no_shapes
+    if use_shapes:
+        if not _onnx_input_has_dynamic_dim(onnx_path):
+            print(
+                "Detected static ONNX input shape; skipping --shapes automatically. "
+                "Use --no-shapes explicitly to suppress this message.",
+                file=sys.stderr,
+            )
+            use_shapes = False
+
     cmd: List[str] = [
         str(trtexec),
         f"--onnx={onnx_path}",
         f"--saveEngine={engine_out}",
         f"--memPoolSize=workspace:{args.workspace_mb}M",
-        f"--shapes={shapes_arg}",
     ] + extra_trt
+    if use_shapes:
+        cmd.append(f"--shapes={shapes_arg}")
 
     if args.dry_run:
         print("Profile:", profile)
