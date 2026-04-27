@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -55,22 +54,27 @@ def test_trtexec_invocation_fp16(
     # Use shell-style mock: the real trtexec is not available in CI
     runs = {"n": 0}
 
-    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        runs["n"] += 1
-        eng = None
-        for a in cmd:
-            if a.startswith("--saveEngine="):
-                eng = Path(a.split("=", 1)[1])
-        assert eng is not None
-        eng.parent.mkdir(parents=True, exist_ok=True)
-        eng.write_bytes(b"TRT1")
-        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+    class _FakePopen:  # noqa: D101
+        def __init__(self, cmd, **kwargs):  # type: ignore[no-untyped-def]
+            self.cmd = cmd
+            self.returncode = 0
+            self.stdout = iter(["ok\n"])
+            runs["n"] += 1
+            eng = None
+            for a in cmd:
+                if a.startswith("--saveEngine="):
+                    eng = Path(a.split("=", 1)[1])
+            assert eng is not None
+            eng.parent.mkdir(parents=True, exist_ok=True)
+            eng.write_bytes(b"TRT1")
 
-    monkeypatch.setattr(
-        be.subprocess,
-        "run",
-        fake_run,
-    )
+        def wait(self):  # type: ignore[no-untyped-def]
+            return self.returncode
+
+    def fake_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        return _FakePopen(cmd, **kwargs)
+
+    monkeypatch.setattr(be.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(be, "_default_trtexec", lambda: trt)  # path exists; still mock run
     # point trtexec in cmd to our fake: fake_run is used so actual binary unused
     monkeypatch.setattr(

@@ -236,19 +236,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     t0 = time.perf_counter()
     log_path = out_dir / "build.log"
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
-    )
+    # Stream trtexec output live to terminal while also persisting to build.log.
+    # Without this, long engine builds look "stuck" because subprocess buffers.
+    with open(log_path, "w", encoding="utf-8", errors="replace") as logf:
+        pop = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # line-buffered when text=True
+        )
+        assert pop.stdout is not None
+        for line in pop.stdout:
+            sys.stdout.write(line)
+            logf.write(line)
+        pop.wait()
+        rc = int(pop.returncode or 0)
     elapsed = time.perf_counter() - t0
-    log_path.write_text(proc.stdout or "", encoding="utf-8", errors="replace")
-    if proc.returncode != 0:
-        print(proc.stdout, file=sys.stderr)
-        print(f"trtexec failed with code {proc.returncode}", file=sys.stderr)
-        return proc.returncode or 1
+    if rc != 0:
+        print(f"trtexec failed with code {rc}", file=sys.stderr)
+        print(f"See log: {log_path}", file=sys.stderr)
+        return rc or 1
     if not engine_out.is_file():
         print(f"Expected engine at {engine_out} but file missing.", file=sys.stderr)
         return 1
