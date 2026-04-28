@@ -5,6 +5,8 @@ codebase_config = dict(
     task='Segmentation', 
     with_argmax=False
 )
+
 onnx_config = dict(
-    input_shape=[640, 480]
+    opset_version=17,
+    input_shape=[512, 512]
 )
