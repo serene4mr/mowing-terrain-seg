@@ -30,7 +30,7 @@ def build_staging(
     *,
     exp_dir: Path,
     pth: Path,
-    deploy_dir: Optional[Path],
+    onnx_dir: Optional[Path],
     summary: Dict[str, Any],
     sample_in: Optional[Path],
     sample_out: Optional[Path],
@@ -61,8 +61,8 @@ def build_staging(
     pth = pth.resolve()
     _copy_file(pth, dest / "pytorch" / "best.pth")
 
-    if deploy_dir is not None:
-        d = deploy_dir.resolve()
+    if onnx_dir is not None:
+        d = onnx_dir.resolve()
         copied: set[str] = set()
         for name in _ONNX_BUNDLE:
             p = d / name

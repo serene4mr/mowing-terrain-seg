@@ -271,9 +271,9 @@ to make them public. The `--repo-id` must be under an org or username you have w
 
 ```bash
 python tools/release.py \
-    --exp-dir work_dirs/dlv3p_r50_ycor_v1 \
+    --exp-dir  work_dirs/dlv3p_r50_ycor_v1 \
     --pth      best_val_mIoU_iter_38000.pth \
-    --deploy   work_dirs/dlv3p_r50_ycor_v1/deploy/onnx \
+    --onnx-dir work_dirs/dlv3p_r50_ycor_v1/deploy/onnx \
     --repo-id  <org>/mts-deeplabv3plus-r50-ycor3cls \
     --tag      v1.1 \
     --message  "Retrained with class-frequency weights"
@@ -282,7 +282,7 @@ python tools/release.py \
 What it does:
 1. Validates the experiment dir: top-level training `*.py` config, `summary.json`, and the chosen `.pth`.
 2. Records git SHA of **this** code repo; refuses if unknown/dirty (use `--allow-dirty` to override).
-3. Checks **drift** between the `.pth` and `onnx/` if `--deploy` is set (Section 6.1).
+3. Checks **drift** between the `.pth` and `onnx/` if `--onnx-dir` is set (Section 6.1).
 4. Builds a staging dir matching the HF layout (Section 3): `config.py`, `summary.json`, `pytorch/best.pth`, `onnx/`, `README.md`, `metrics.json` (+ optional `samples/`).
 5. `HfApi().create_repo` (private by default) + `upload_folder` + `create_tag` on the Hub.
 6. Writes `work_dirs/<exp>/release.json` with provenance, prints `https://huggingface.co/.../tree/<tag>`.
@@ -378,11 +378,10 @@ python tools/release.py \
 
 Hugging Face auth uses the normal `huggingface_hub` flow (`HF_TOKEN` or `huggingface-cli login`). New repos are **private** by default; pass `--public` for a public model repo.
 
-**With ONNX** (after a local `tools/deploy/deploy.py` run): pass `--deploy` to the directory that contains `end2end.onnx` (e.g. `work_dirs/<exp>/deploy/onnx`). ONNX conversion is **always a separate step** — run `tools/deploy/deploy.py` first, then pass the output dir to `--deploy`.
+**With ONNX** (after a local `tools/deploy/deploy.py` run): pass `--onnx-dir` to the directory that contains `end2end.onnx` (e.g. `work_dirs/<exp>/deploy/onnx`). ONNX conversion is **always a separate step** — run `tools/deploy/deploy.py` first, then pass the output dir to `--onnx-dir`.
 
 **Other flags:**
 
-- `--metrics-pkl` — optional eval pickle; merged into `metrics.json` as `eval_extra` (shallow, JSON-safe)
 - `--samples-in` + `--samples-out` — copy demo images to `samples/input.jpg` and `samples/output.png`
 - `--dry-run` — build the release tree in a temp dir and list files; no Hub call (no `huggingface_hub` required)
 
@@ -392,7 +391,7 @@ Hugging Face auth uses the normal `huggingface_hub` flow (`HF_TOKEN` or `hugging
 
 ### 6.1 Drift safety (`.pth` vs ONNX)
 
-If `--deploy` is set, the tool requires `end2end.onnx` and **fails** if the checkpoint is **newer** than the ONNX (mtime), with a one-line hint to re-run `tools/deploy/deploy.py`. This keeps published `onnx/` aligned with `pytorch/best.pth` on the same tag.
+If `--onnx-dir` is set, the tool requires `end2end.onnx` and **fails** if the checkpoint is **newer** than the ONNX (mtime), with a one-line hint to re-run `tools/deploy/deploy.py`. This keeps published `onnx/` aligned with `pytorch/best.pth` on the same tag.
 
 `detail.json` is checked best-effort: if the checkpoint name does not appear, a **warning** is logged (mmdeploy’s schema can vary by version). Re-run deploy when in doubt.
 

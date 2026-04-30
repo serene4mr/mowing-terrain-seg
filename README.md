@@ -32,7 +32,7 @@ python tools/release.py --exp-dir work_dirs/<your_exp> --pth best_val_mIoU_iter_
   --repo-id <org>/mts-... --tag v1.0.0 --message "Notes" --dry-run --allow-dirty
 ```
 
-Use `--deploy work_dirs/.../deploy/onnx` to include a prior ONNX export; see **§6** in [docs/mlops.md](docs/mlops.md) for the full flag list, drift check, and auth.
+Use `--onnx-dir work_dirs/.../deploy/onnx` to include a prior ONNX export; see **§6** in [docs/mlops.md](docs/mlops.md) for the full flag list, drift check, and auth.
 
 ## Quick Start
 

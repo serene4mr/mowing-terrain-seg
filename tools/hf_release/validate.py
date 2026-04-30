@@ -119,26 +119,26 @@ def check_git(
     return sha, dirty
 
 
-def _deploy_hint() -> str:
+def _onnx_hint() -> str:
     return (
         "Re-run: python tools/deploy/deploy.py <deploy_cfg> <model_cfg> <checkpoint> "
-        "<image> --work-dir <this_deploy_dir> --dump-info"
+        "<image> --work-dir <this_onnx_dir> --dump-info"
     )
 
 
-def deploy_drift(
-    deploy_dir: Path, pth_path: Path, *, pth_basename: Optional[str] = None
+def onnx_drift(
+    onnx_dir: Path, pth_path: Path, *, pth_basename: Optional[str] = None
 ) -> None:
     """Fail with exit 2 if onnx is missing or older than the checkpoint .pth.
 
     ``pth_basename`` is the filename the release uses (e.g. ``best_*.pth``); if set,
     we prefer matching this string in ``detail.json`` text when heuristics run.
     """
-    d = deploy_dir.resolve()
+    d = onnx_dir.resolve()
     onnx = d / "end2end.onnx"
     if not onnx.is_file():
         print(
-            f"Missing {onnx} under --deploy. {_deploy_hint()}",
+            f"Missing {onnx} under --onnx-dir. {_onnx_hint()}",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -150,7 +150,7 @@ def deploy_drift(
             f"Checkpoint is newer than ONNX — redeploy so ORT model matches the .pth.\n"
             f"  pth:  {pth} (mtime {pth_t})\n"
             f"  onnx: {onnx} (mtime {o_t})\n"
-            f"{_deploy_hint()}",
+            f"{_onnx_hint()}",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -174,7 +174,7 @@ def deploy_drift(
         "detail.json does not appear to reference %r (from %r). May be a stale deploy. %s",
         target,
         pth,
-        _deploy_hint(),
+        _onnx_hint(),
     )
 
 

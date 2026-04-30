@@ -320,7 +320,7 @@ python tools/build_engine.py \
 ```
 
 - **Profile** (folder name) is **auto-detected** from the board, memory, JetPack
-  guess, and TensorRT Python version, unless you pass `--profile my-name`.
+  guess, and TensorRT Python version.
 - **Static shapes** default to `1,3,1024,544` (`--input-shape`).
 - **Local ONNX** (no Hub): `--no-pull --onnx /path/to/end2end.onnx` (still
   records provenance in `platform.json`).
@@ -350,8 +350,6 @@ python tools/release.py \
 
 - **`--allow-dirty`**: also skips the **ONNX hash check** (Hub download vs
   `platform.json`). Omit it in CI/production so drift is caught.
-- **`--profile`**: override the Hub subfolder name; `platform.json` in the
-  upload is updated to match.
 - Provenance is written to `hf_engine_release.json` inside `--engine-dir`.
 
 ### Hub layout

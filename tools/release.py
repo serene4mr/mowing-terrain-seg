@@ -80,6 +80,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         description="Release experiment artifacts to Hugging Face Hub (tag = version).",
     )
     p.add_argument(
+        "--repo-id",
+        required=True,
+        help="HF model repo, e.g. <org>/mts-deeplabv3plus-r50-ycor3cls",
+    )
+    p.add_argument(
         "--exp-dir",
         type=Path,
         default=None,
@@ -89,23 +94,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--pth",
         default=None,
         help="Checkpoint file name inside --exp-dir (e.g. best_val_mIoU_iter_5000.pth).",
-    )
-    p.add_argument(
-        "--engine-dir",
-        type=Path,
-        default=None,
-        help="Output dir from tools/build_engine.py (end2end.engine + platform.json). "
-        "Mutually exclusive with --exp-dir (TensorRT engine-only upload).",
-    )
-    p.add_argument(
-        "--profile",
-        default=None,
-        help="Override TensorRT profile subfolder name (default: from platform.json).",
-    )
-    p.add_argument(
-        "--repo-id",
-        required=True,
-        help="HF model repo, e.g. <org>/mts-deeplabv3plus-r50-ycor3cls",
     )
     p.add_argument(
         "--tag",
@@ -118,13 +106,20 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Release notes; used in commit and tag on the Hub",
     )
     p.add_argument(
-        "--deploy",
+        "--onnx-dir",
         type=Path,
         default=None,
         help=(
             "Path to local ONNX / mmdeploy output dir (parent of end2end.onnx). "
             "Run tools/deploy/deploy.py first, then pass that dir here."
         ),
+    )
+    p.add_argument(
+        "--engine-dir",
+        type=Path,
+        default=None,
+        help="Output dir from tools/build_engine.py (end2end.engine + platform.json). "
+        "Mutually exclusive with --exp-dir (TensorRT engine-only upload).",
     )
     p.add_argument(
         "--samples-in",
@@ -137,12 +132,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional expected demo output; requires --samples-in",
-    )
-    p.add_argument(
-        "--metrics-pkl",
-        type=Path,
-        default=None,
-        help="Optional evaluation pickle; merged as metrics.json eval_extra",
     )
     p.add_argument(
         "--dry-run",
@@ -194,18 +183,14 @@ def main_engine(args: argparse.Namespace) -> int:
     except SystemExit as e:
         return int(e.code) if isinstance(e.code, int) else 2
 
-    profile = args.profile or plat_data.get("profile")
+    profile = plat_data.get("profile")
     if not profile or not isinstance(profile, str):
-        print("Could not determine profile; set --profile or fix platform.json", file=sys.stderr)
+        print("Could not determine profile; fix platform.json", file=sys.stderr)
         return 2
-
-    plat_merged: Dict[str, Any] = copy.deepcopy(plat_data)
-    if args.profile:
-        plat_merged["profile"] = args.profile
 
     readme_in = _fetch_readme_from_hub(args.repo_id, args.tag)
     try:
-        merged_readme = card.merge_tensorrt_engines_readme(readme_in, plat_merged)
+        merged_readme = card.merge_tensorrt_engines_readme(readme_in, plat_data)
     except (OSError, ValueError) as e:
         print(f"Model card merge failed: {e}", file=sys.stderr)
         return 2
@@ -218,11 +203,6 @@ def main_engine(args: argparse.Namespace) -> int:
                 dest=dest,
                 profile=profile,
             )
-            if args.profile:
-                (pdir / "platform.json").write_text(
-                    json.dumps(plat_merged, indent=2, sort_keys=True),
-                    encoding="utf-8",
-                )
             (dest / "README.md").write_text(merged_readme, encoding="utf-8")
 
             if args.dry_run:
@@ -251,7 +231,7 @@ def main_engine(args: argparse.Namespace) -> int:
 
 def main_experiment(args: argparse.Namespace) -> int:
     exp_dir = args.exp_dir.resolve()  # type: ignore[union-attr]
-    deploy: Optional[Path] = Path(args.deploy).resolve() if args.deploy else None
+    onnx_dir: Optional[Path] = Path(args.onnx_dir).resolve() if args.onnx_dir else None
 
     if (args.samples_in is None) ^ (args.samples_out is None):
         print(
@@ -269,8 +249,8 @@ def main_experiment(args: argparse.Namespace) -> int:
     except SystemExit as e:
         return int(e.code) if isinstance(e.code, int) else 2
 
-    if deploy is not None:
-        validate.deploy_drift(deploy, pth, pth_basename=pth.name)
+    if onnx_dir is not None:
+        validate.onnx_drift(onnx_dir, pth, pth_basename=pth.name)
 
     has_onnx_in_release = False
     try:
@@ -279,13 +259,13 @@ def main_experiment(args: argparse.Namespace) -> int:
             staging.build_staging(
                 exp_dir=exp_dir,
                 pth=pth,
-                deploy_dir=deploy,
+                onnx_dir=onnx_dir,
                 summary=summary,
                 sample_in=args.samples_in,
                 sample_out=args.samples_out,
                 dest=dest,
             )
-            metrics.write_metrics_json(dest, summary, args.metrics_pkl)
+            metrics.write_metrics_json(dest, summary)
             has_onnx_in_release = (dest / "onnx" / "end2end.onnx").is_file()
             readme = card.render(
                 summary=summary,
