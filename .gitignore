@@ -69,8 +69,6 @@ docs/_build/
 docs/build/
 
 # ─── Training outputs (local only, never committed) ───────────────────────────
-work_dirs/
-work_dirs_old/
 tmp/
 
 # ─── Deploy / inference outputs ───────────────────────────────────────────────
