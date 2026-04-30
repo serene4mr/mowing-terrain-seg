@@ -34,6 +34,12 @@ from mmdeploy.apis import create_calib_input_data, extract_model, get_predefined
 from mmdeploy.utils import IR, get_calib_filename, get_ir_config, get_partition_config, get_root_logger, load_config
 
 _EXPORT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(os.path.dirname(_EXPORT_DIR))
+_SRC_ROOT = os.path.join(_REPO_ROOT, "src")
+for _path in (_SRC_ROOT, _REPO_ROOT):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
 _HELPERS_DIR = os.path.join(_EXPORT_DIR, "helpers")
 if _HELPERS_DIR not in sys.path:
     sys.path.insert(0, _HELPERS_DIR)
