@@ -71,15 +71,6 @@ docs/build/
 # ─── Training outputs (local only, never committed) ───────────────────────────
 tmp/
 
-# ─── Deploy / inference outputs ───────────────────────────────────────────────
-mmdeploy_model/
-checkpoints/
-inference_out/
-
-# ─── Third-party repos cloned locally ─────────────────────────────────────────
-onedl-mmdetection/
-onedl-mmdeploy/
-
 # ─── ML experiment tracking ───────────────────────────────────────────────────
 mlruns/
 
