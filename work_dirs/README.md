@@ -14,10 +14,12 @@ work_dirs/
       <timestamp>/            # auto-created log_dir by MMEngine
         log.json
         log.txt
+        ...
       latest.pth              # checkpoints for this run only
       best.pth
       epoch_*.pth
-      config.py               # dumped effective config
+      <config>.py               # dumped effective config
+      ...
 ```
 
 - `exp_name`: encodes model / dataset / main hyperparams  
