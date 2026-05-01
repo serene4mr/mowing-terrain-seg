@@ -5,7 +5,7 @@ _base_ = [
     '../_base_/models/segformer_mit-b0.py',
     '../_base_/datasets/mts-ycor-v1.0.0.py',
     '../_base_/default_runtime.py',
-    '../_base_/schedules/schedule_160k.py'
+    '../_base_/schedules/schedule_40k.py'
 ]
 
 # ==============================================================================
@@ -96,7 +96,7 @@ param_scheduler = [
         eta_min=0.0,
         power=1.0,
         begin=1500,
-        end=160000,
+        end=8000,
         by_epoch=False,
     )
 ]
@@ -105,7 +105,7 @@ param_scheduler = [
 # 5. Training Loop
 # ==============================================================================
 train_cfg = dict(type='IterBasedTrainLoop', 
-    max_iters=160000, 
+    max_iters=8000, 
     val_interval=4000
 )
 val_cfg = dict(type='ValLoop')

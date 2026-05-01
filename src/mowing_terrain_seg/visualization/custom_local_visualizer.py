@@ -132,7 +132,7 @@ class CustomSegLocalVisualizer(SegLocalVisualizer):
         
         if should_save:
             # Create unique name with folder structure: iter_4000/val_rgb_10
-            new_name = f"iter_{current_iter}/val_rgb_{self.val_image_counter:02d}"
+            new_name = f"iter_{current_iter}/val_rgb_{self.val_image_counter:02d}.png"
             
             # Use the visualizer's save_dir
 
