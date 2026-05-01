@@ -1,8 +1,14 @@
 import argparse
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
+
+# Add src to sys.path so mowing_terrain_seg can be imported without installation
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import cv2
 import numpy as np

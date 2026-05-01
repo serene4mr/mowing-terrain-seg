@@ -2,6 +2,13 @@
 import argparse
 import os
 import os.path as osp
+import sys
+from pathlib import Path
+
+# Add src to sys.path so mowing_terrain_seg can be imported without installation
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import mowing_terrain_seg
 

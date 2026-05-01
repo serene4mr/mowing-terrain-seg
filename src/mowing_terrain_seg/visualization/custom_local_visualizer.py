@@ -265,8 +265,8 @@ class CustomSegLocalVisualizer(SegLocalVisualizer):
     
         if out_file is not None:
             mmcv.imwrite(mmcv.rgb2bgr(drawn_img), out_file)
-        else:
-            self.add_image(name, drawn_img, step)
+            
+        self.add_image(name, drawn_img, step)
             
     def _draw_conf_map(self, 
                        image: np.ndarray, 

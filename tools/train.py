@@ -1,10 +1,15 @@
-# Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 import logging
 import os
 import os.path as osp
 import sys
+from datetime import datetime
 from pathlib import Path
+
+# Add src to sys.path so mowing_terrain_seg can be imported without installation
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import mowing_terrain_seg
 
@@ -20,12 +25,26 @@ from mmseg.registry import RUNNERS
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentor')
     parser.add_argument('config', help='train config file path')
-    parser.add_argument('--work-dir', help='the dir to save logs and models')
+    parser.add_argument(
+        '--work-dir',
+        default=None,
+        help='the dir to save logs and models')
+    parser.add_argument(
+        '--exp-name',
+        default=None,
+        help='Name of the experiment. Defaults to the config filename if not specified.')
+    parser.add_argument(
+        '--run-id',
+        default=None,
+        help='ID of the run. Defaults to a timestamp if not specified.')
     parser.add_argument(
         '--resume',
         action='store_true',
         default=False,
-        help='resume from the latest checkpoint in the work_dir automatically')
+        help='Resume from the latest checkpoint in the work_dir (reuse the same run_id directory).')
+    parser.add_argument(
+        '--load-from',
+        help='The checkpoint file to load weights from.')
     parser.add_argument(
         '--amp',
         action='store_true',
@@ -50,12 +69,6 @@ def parse_args():
     # will pass the `--local-rank` parameter to `tools/train.py` instead
     # of `--local_rank`.
     parser.add_argument('--local_rank', '--local-rank', type=int, default=0)
-    parser.add_argument(
-        '--no-summarize',
-        action='store_true',
-        default=False,
-        help='Skip writing summary.json after training.',
-    )
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
@@ -72,14 +85,29 @@ def main():
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
 
-    # work_dir is determined in this priority: CLI > segment in file > filename
+    # Determine Experiment Name (CLI > Config > Filename)
+    if args.exp_name:
+        cfg.exp_name = args.exp_name
+    elif cfg.get('exp_name', None) is None:
+        cfg.exp_name = osp.splitext(osp.basename(args.config))[0]
+
+    # Determine Run ID (CLI > Config > Timestamp)
+    if args.run_id:
+        cfg.run_id = args.run_id
+    elif cfg.get('run_id', None) is None:
+        cfg.run_id = f'run_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+
+    # work_dir logic (CLI > Config > Default Path)
     if args.work_dir is not None:
-        # update configs according to CLI args if args.work_dir is not None
         cfg.work_dir = args.work_dir
     elif cfg.get('work_dir', None) is None:
-        # use config filename as default work_dir if cfg.work_dir is None
-        cfg.work_dir = osp.join('./work_dirs',
-                                osp.splitext(osp.basename(args.config))[0])
+        # Use the already-determined names to build the path
+        cfg.work_dir = osp.join('./work_dirs', cfg.exp_name, cfg.run_id)
+
+    print_log(f'Experiment: {cfg.exp_name}', logger='current')
+    print_log(f'Run ID:     {cfg.run_id}', logger='current')
+    print_log(f'Work Dir:   {cfg.work_dir}', logger='current')
+
 
     # enable automatic-mixed-precision training
     if args.amp is True:
@@ -99,6 +127,16 @@ def main():
     # resume training
     cfg.resume = args.resume
 
+    # load from a specific checkpoint
+    if args.load_from is not None:
+        cfg.load_from = args.load_from
+
+    if cfg.resume and cfg.get('load_from', None) is not None:
+        raise ValueError(
+            'Both "resume" and "load_from" are specified in the config or CLI. '
+            'Please use only one: "resume" to continue a run, or "load_from" '
+            'to initialize a new run with weights.')
+
     # build the runner from config
     if 'runner_type' not in cfg:
         # build the default runner
@@ -110,25 +148,6 @@ def main():
 
     # start training
     runner.train()
-
-    if not args.no_summarize:
-        _repo = Path(__file__).resolve().parent.parent
-        if str(_repo) not in sys.path:
-            sys.path.insert(0, str(_repo))
-        try:
-            from tools.summarize_experiment import summarize
-            p = summarize(str(runner.work_dir))
-            print_log(
-                f'Summary written to {p}',
-                logger='current',
-                level=logging.INFO,
-            )
-        except Exception as e:  # noqa: BLE001
-            print_log(
-                f'Summary generation failed: {e}',
-                logger='current',
-                level=logging.WARNING,
-            )
 
 
 if __name__ == '__main__':

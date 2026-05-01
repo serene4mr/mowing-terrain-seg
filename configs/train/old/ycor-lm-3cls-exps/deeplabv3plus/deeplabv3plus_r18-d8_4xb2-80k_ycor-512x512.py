@@ -2,10 +2,10 @@
 # 4 GPUs x 2 samples per GPU, trained for 80K iterations
 
 _base_ = [
-    '../../_base_/models/deeplabv3plus_r50-d8.py', 
-    '../../_base_/datasets/ycor-lm-3cls.py',
-    '../../_base_/default_runtime.py', 
-    '../../_base_/schedules/schedule_80k.py'
+    '../../../_base_/models/deeplabv3plus_r50-d8.py', 
+    '../../../_base_/datasets/ycor-lm-3cls.py',
+    '../../../_base_/default_runtime.py', 
+    '../../../_base_/schedules/schedule_80k.py'
 ]
 
 # YCOR-specific crop size
