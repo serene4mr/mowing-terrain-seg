@@ -17,7 +17,12 @@ checkpoint = 'https://download.openmmlab.com/mmsegmentation/v0.5/pretrain/segfor
 
 model = dict(
     data_preprocessor=data_preprocessor,
-    backbone=dict(init_cfg=dict(type='Pretrained', checkpoint=checkpoint)),
+    backbone=dict(
+        init_cfg=dict(
+            type='Pretrained', 
+            checkpoint=checkpoint
+        )
+    ),
     decode_head=dict(num_classes=3)
 )
 
