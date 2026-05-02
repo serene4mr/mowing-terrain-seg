@@ -14,6 +14,9 @@ Usage:
   python tools/export/torch2onnx.py <deploy_cfg> <model_cfg> <checkpoint> <img> \
     --work-dir work_dirs/export_onnx --device cuda
 
+  # Generate SDK information (pipeline.json, etc.)
+  python tools/export/torch2onnx.py ... --dump-info
+
   # Keep custom ops (do not fail if any remain after rewrite)
   python tools/export/torch2onnx.py ... --allow-custom-ops
 
@@ -31,6 +34,7 @@ import mmengine
 import onnx
 
 from mmdeploy.apis import create_calib_input_data, extract_model, get_predefined_partition_cfg, torch2onnx
+from mmdeploy.backend.sdk.export_info import export2SDK
 from mmdeploy.utils import IR, get_calib_filename, get_ir_config, get_partition_config, get_root_logger, load_config
 
 _EXPORT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -86,6 +90,16 @@ def parse_args():
         action="store_true",
         help="Do not exit with error if custom mmdeploy/mmcv ops remain after rewrite.",
     )
+    parser.add_argument(
+        "--dump-info",
+        action="store_true",
+        help="Output information for SDK.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print export plan without executing.",
+    )
     return parser.parse_args()
 
 
@@ -138,8 +152,21 @@ def main():
     model_cfg_path = args.model_cfg
     checkpoint_path = args.checkpoint
 
-    deploy_cfg, _ = load_config(deploy_cfg_path, model_cfg_path)
+    deploy_cfg, model_cfg = load_config(deploy_cfg_path, model_cfg_path)
     mmengine.mkdir_or_exist(osp.abspath(args.work_dir))
+
+    if args.dump_info:
+        export2SDK(
+            deploy_cfg,
+            model_cfg,
+            args.work_dir,
+            pth=checkpoint_path,
+            device=args.device,
+        )
+
+    if args.dry_run:
+        logger.info("Dry run: skipping export.")
+        return
 
     ir_config = get_ir_config(deploy_cfg)
     ir_type = IR.get(ir_config["type"])
