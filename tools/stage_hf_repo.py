@@ -73,6 +73,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Optional path to TensorRT engine folder.",
     )
     p.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="Optional output staging directory. Defaults to work_dirs/.hf/<repo-name>.",
+    )
+    p.add_argument(
         "--push",
         action="store_true",
         help="If set, automatically push the staged repository to the Hugging Face Hub.",
@@ -554,7 +560,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     # Step 7: Copy artifacts to staging directory
-    dest = STAGING_ROOT / args.repo_name
+    if args.out_dir is not None:
+        dest = args.out_dir
+    else:
+        dest = STAGING_ROOT / args.repo_name
     print(f"\nStaging to: {dest}")
     stage_artifacts(
         dest=dest,
