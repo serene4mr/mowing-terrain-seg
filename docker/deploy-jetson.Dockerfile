@@ -23,8 +23,6 @@ WORKDIR /workspace
 ENV PYTHONPATH=/workspace
 
 # Usage Example:
-#   docker run --rm -it --runtime nvidia -v $(pwd):/workspace mts-deploy-jetson \
-#     python3 tools/export/onnx_add_argmax_output.py deploy/onnx/end2end.onnx deploy/onnx/end2end_dual.onnx
 #
 #   docker run --rm -it --runtime nvidia -v $(pwd):/workspace mts-deploy-jetson \
 #     python3 tools/export/onnx2tensorrt.py --onnx deploy/onnx/end2end_dual.onnx --output-dir deploy/tensorrt
