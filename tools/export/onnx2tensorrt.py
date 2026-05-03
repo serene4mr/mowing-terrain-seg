@@ -112,7 +112,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print("-" * 60)
 
     t0 = time.perf_counter()
-    log_path = out_dir / "build.log"
+    log_path = out_dir / f"{onnx_path.stem}_build.log"
     
     # Stream trtexec output live to terminal and persist to build.log
     with open(log_path, "w", encoding="utf-8", errors="replace") as logf:
