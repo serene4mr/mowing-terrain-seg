@@ -1,3 +1,4 @@
 # Lean Jetson / TensorRT build container extras (Hugging Face pull + release).
 # See docker/deploy-jetson.Dockerfile
 huggingface_hub>=0.20
+onnx>=1.12
