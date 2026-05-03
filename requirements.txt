@@ -33,3 +33,5 @@ future
 # Dev / CI
 pytest>=7.0
 onnx>=1.12
+
+huggingface_hub>=0.20
