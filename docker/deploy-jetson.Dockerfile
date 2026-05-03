@@ -2,8 +2,14 @@
 # Build on an aarch64 host with the base image, or: docker buildx build --platform linux/arm64 .
 FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
+# Install pip and system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements-deploy.txt /tmp/requirements-deploy.txt
-RUN pip install --no-cache-dir -r /tmp/requirements-deploy.txt
+RUN python3 -m pip install --no-cache-dir --upgrade pip \
+    && python3 -m pip install --no-cache-dir -r /tmp/requirements-deploy.txt
 
 COPY pyproject.toml /workspace/pyproject.toml
 COPY tools/__init__.py /workspace/tools/__init__.py
