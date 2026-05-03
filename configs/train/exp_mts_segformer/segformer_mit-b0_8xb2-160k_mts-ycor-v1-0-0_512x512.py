@@ -129,7 +129,8 @@ vis_backends = [
     dict(
         type='MLflowVisBackend',
         # 1. Store the global DB in a hidden folder to keep work_dirs clean
-        tracking_uri='sqlite:///work_dirs/.mlflow/mlflow.db',
+        # tracking_uri='sqlite:///work_dirs/.mlflow/mlflow.db',
+        tracking_uri='http://172.17.0.1:5000',
         
         # 2. Automatically log .pth, .log, and config files to MLflow
         artifact_suffix=('.pth', '.json', '.log', '.py', '.yaml', '.txt'),

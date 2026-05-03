@@ -46,6 +46,10 @@ def parse_args():
         '--load-from',
         help='The checkpoint file to load weights from.')
     parser.add_argument(
+        '--tracking-uri',
+        default=None,
+        help='MLflow tracking URI. Overrides the value in the config.')
+    parser.add_argument(
         '--amp',
         action='store_true',
         default=False,
@@ -84,6 +88,14 @@ def main():
     cfg.launcher = args.launcher
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
+
+    # MLflow tracking URI override
+    if args.tracking_uri:
+        if 'visualizer' in cfg and 'vis_backends' in cfg.visualizer:
+            for backend in cfg.visualizer.vis_backends:
+                if backend.get('type') == 'MLflowVisBackend':
+                    backend['tracking_uri'] = args.tracking_uri
+                    print_log(f'Overriding MLflow tracking URI to: {args.tracking_uri}', logger='current')
 
     # Determine Experiment Name (CLI > Config > Filename)
     if args.exp_name:
