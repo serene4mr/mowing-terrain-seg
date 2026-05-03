@@ -57,8 +57,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--input-shape",
-        default="1,3,512,512",
-        help="Input shape as comma-separated integers (e.g. 1,3,512,512).",
+        default="",
+        help="Optional input shape for dynamic models (e.g. 1,3,512,512). Leave empty for static models.",
     )
     p.add_argument(
         "--dry-run",
@@ -91,17 +91,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     elif args.precision == "int8":
         extra_trt.append("--int8")
 
-    # Parse shape and format for trtexec
-    shape_parts = [x.strip() for x in args.input_shape.split(",") if x.strip()]
-    shapes_arg = f"input:{'x'.join(shape_parts)}"
-
     cmd: List[str] = [
         str(trtexec),
         f"--onnx={onnx_path}",
         f"--saveEngine={engine_out}",
         f"--memPoolSize=workspace:{args.workspace_mb}M",
-        f"--shapes={shapes_arg}",
     ] + extra_trt
+
+    if args.input_shape:
+        # Parse shape and format for trtexec
+        shape_parts = [x.strip() for x in args.input_shape.split(",") if x.strip()]
+        shapes_arg = f"input:{'x'.join(shape_parts)}"
+        cmd.append(f"--shapes={shapes_arg}")
 
     if args.dry_run:
         print("Would run:", " ".join(shlex.quote(c) for c in cmd))
