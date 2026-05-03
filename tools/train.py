@@ -90,12 +90,12 @@ def main():
         cfg.merge_from_dict(args.cfg_options)
 
     # MLflow tracking URI override
-    if args.tracking_uri:
-        if 'visualizer' in cfg and 'vis_backends' in cfg.visualizer:
-            for backend in cfg.visualizer.vis_backends:
-                if backend.get('type') == 'MLflowVisBackend':
-                    backend['tracking_uri'] = args.tracking_uri
-                    print_log(f'Overriding MLflow tracking URI to: {args.tracking_uri}', logger='current')
+    # if args.tracking_uri:
+    #     if 'visualizer' in cfg and 'vis_backends' in cfg.visualizer:
+    #         for backend in cfg.visualizer.vis_backends:
+    #             if backend.get('type') == 'MLflowVisBackend':
+    #                 backend['tracking_uri'] = args.tracking_uri
+    #                 print_log(f'Overriding MLflow tracking URI to: {args.tracking_uri}', logger='current')
 
     # Determine Experiment Name (CLI > Config > Filename)
     if args.exp_name:

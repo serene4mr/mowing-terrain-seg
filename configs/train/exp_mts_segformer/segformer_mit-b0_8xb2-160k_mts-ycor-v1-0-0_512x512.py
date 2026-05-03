@@ -155,25 +155,3 @@ visualizer = dict(
     max_images_per_iter=5,
 )
 
-default_hooks = dict(
-    timer=dict(type='IterTimerHook'),
-    logger=dict(type='LoggerHook', 
-        interval=50, 
-        log_metric_by_epoch=False
-    ),
-    param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(
-        type='CheckpointHook',
-        by_epoch=False,
-        interval=4000,
-        save_best='val/mIoU',
-        rule='greater',
-        max_keep_ckpts=5
-    ),
-    sampler_seed=dict(type='DistSamplerSeedHook'),
-    visualization=dict(
-        type='SegVisualizationHook', 
-        draw=True, 
-        interval=1
-    )
-)
