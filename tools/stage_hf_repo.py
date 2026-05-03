@@ -78,11 +78,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Optional output staging directory. Defaults to work_dirs/.hf/<repo-name>.",
     )
-    p.add_argument(
-        "--push",
-        action="store_true",
-        help="If set, automatically push the staged repository to the Hugging Face Hub.",
-    )
     return p.parse_args(argv)
 
 
@@ -468,40 +463,6 @@ def print_summary(dest: Path, global_metrics: Dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Hugging Face Upload
-# ---------------------------------------------------------------------------
-
-def push_to_hf(repo_id: str, staged_dir: Path) -> None:
-    """Push the staged directory to the Hugging Face Hub."""
-    print("\n" + "=" * 60)
-    print(f"  Pushing to Hugging Face Hub: {repo_id}")
-    print("=" * 60)
-    try:
-        from huggingface_hub import HfApi
-    except ImportError:
-        print("ERROR: huggingface_hub is not installed. Run: pip install huggingface_hub", file=sys.stderr)
-        sys.exit(1)
-
-    api = HfApi()
-    
-    # Check if repo exists, create if not
-    try:
-        api.model_info(repo_id)
-        print(f"  Repository {repo_id} exists. Uploading files...")
-    except Exception:
-        print(f"  Creating new repository: {repo_id}...")
-        api.create_repo(repo_id=repo_id, repo_type="model", exist_ok=True)
-        
-    api.upload_folder(
-        folder_path=str(staged_dir),
-        repo_id=repo_id,
-        repo_type="model",
-        commit_message="Update model artifacts via staging script"
-    )
-    print(f"\n  Successfully pushed to: https://huggingface.co/{repo_id}")
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -578,10 +539,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Step 8: Print summary
     print_summary(dest, global_metrics)
-
-    # Step 9: Push to Hugging Face (Optional)
-    if args.push:
-        push_to_hf(args.repo_name, dest)
 
     return 0
 
