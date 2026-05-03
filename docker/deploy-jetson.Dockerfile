@@ -1,6 +1,7 @@
 # Jetson: TensorRT engine build (trtexec) + ONNX post-processing + HF release tools.
 # Build on an aarch64 host with the base image, or: docker buildx build --platform linux/arm64 .
-FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
+# FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
+FROM ghcr.io/serene4mr/mowbot:devel-jetson-l4t-r36.4-latest
 
 # Install pip and system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
